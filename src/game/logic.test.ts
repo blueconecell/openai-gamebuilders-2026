@@ -43,9 +43,9 @@ describe('operator rail', () => {
   })
 
   it('assigns deliberately fragile durability by part category', () => {
-    expect(partDurability(add3)).toBe(20)
-    expect(partDurability({ kind: 'weapon', weapon: 'saw', mass: 4 })).toBe(26)
-    expect(partDurability({ kind: 'body', mass: 2 })).toBe(32)
+    expect(partDurability(add3)).toBe(12)
+    expect(partDurability({ kind: 'weapon', weapon: 'saw', mass: 4 })).toBe(14)
+    expect(partDurability({ kind: 'body', mass: 2 })).toBe(18)
   })
 })
 
@@ -60,15 +60,16 @@ describe('local save', () => {
       scrap: 4,
       discoveries: 0,
       victories: 0,
+      tutorialSeen: false,
       safeRun: null,
     })
 
     let written = ''
     writeSave(
-      { scrap: 9, discoveries: 2, victories: 1, safeRun: null },
+      { scrap: 9, discoveries: 2, victories: 1, tutorialSeen: true, safeRun: null },
       { setItem: (key, value) => { written = `${key}:${value}` } },
     )
-    expect(written).toBe(`${SAVE_KEY}:{"scrap":9,"discoveries":2,"victories":1,"safeRun":null}`)
+    expect(written).toBe(`${SAVE_KEY}:{"scrap":9,"discoveries":2,"victories":1,"tutorialSeen":true,"safeRun":null}`)
   })
 
   it('restores a safe run and ignores storage write failures', () => {
@@ -88,7 +89,7 @@ describe('local save', () => {
       yRatio: 0.6,
       explored: 75,
       slots: [{ kind: 'add', value: 3, mass: 3 }, null],
-      slotIntegrity: [20, 0],
+      slotIntegrity: [12, 0],
     })
     expect(() => writeSave(restored, { setItem: () => { throw new Error('blocked') } })).not.toThrow()
   })
@@ -111,6 +112,6 @@ describe('local save', () => {
       { kind: 'body', mass: 2 },
       { kind: 'defense', defense: 'repair', mass: 4 },
     ])
-    expect(restored.safeRun?.slotIntegrity).toEqual([4, 32, 28])
+    expect(restored.safeRun?.slotIntegrity).toEqual([4, 18, 16])
   })
 })

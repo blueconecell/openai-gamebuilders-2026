@@ -15,6 +15,7 @@ export type SaveData = {
   scrap: number
   discoveries: number
   victories: number
+  tutorialSeen: boolean
   safeRun: SafeRun | null
 }
 
@@ -32,6 +33,7 @@ export const DEFAULT_SAVE: SaveData = {
   scrap: 0,
   discoveries: 0,
   victories: 0,
+  tutorialSeen: false,
   safeRun: null,
 }
 
@@ -53,10 +55,10 @@ export function movementScale(mass: number): number {
 }
 
 export function partDurability(part: ShipPart): number {
-  if (part.kind === 'body') return 32
-  if (part.kind === 'weapon') return 26
-  if (part.kind === 'defense') return 28
-  return 20
+  if (part.kind === 'body') return 18
+  if (part.kind === 'weapon') return 14
+  if (part.kind === 'defense') return 16
+  return 12
 }
 
 export function readSave(storage?: Pick<Storage, 'getItem'>): SaveData {
@@ -68,6 +70,7 @@ export function readSave(storage?: Pick<Storage, 'getItem'>): SaveData {
       scrap: validCount(value.scrap),
       discoveries: validCount(value.discoveries),
       victories: validCount(value.victories),
+      tutorialSeen: value.tutorialSeen === true,
       safeRun: validSafeRun(value.safeRun),
     }
   } catch {
