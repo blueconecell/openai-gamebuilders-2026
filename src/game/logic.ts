@@ -23,6 +23,7 @@ export type SafeRun = {
   yRatio: number
   explored: number
   slots: Array<ShipPart | null>
+  slotIntegrity: number[]
 }
 
 export const SAVE_KEY = 'overflow-far-space-save-v1'
@@ -49,6 +50,13 @@ export function calculateMass(slots: Array<ShipPart | null>): number {
 export function movementScale(mass: number): number {
   if (mass <= 6) return 1
   return Math.max(0.55, 1 - (mass - 6) * 0.075)
+}
+
+export function partDurability(part: ShipPart): number {
+  if (part.kind === 'body') return 32
+  if (part.kind === 'weapon') return 26
+  if (part.kind === 'defense') return 28
+  return 20
 }
 
 export function readSave(storage?: Pick<Storage, 'getItem'>): SaveData {
@@ -86,12 +94,21 @@ function validSafeRun(value: unknown): SafeRun | null {
   const run = value as Partial<SafeRun>
   if (!Array.isArray(run.slots)) return null
 
+  const slots = run.slots.slice(0, 6).map(validPart)
+  const savedIntegrity = Array.isArray(run.slotIntegrity) ? run.slotIntegrity : []
   return {
     xRatio: validRatio(run.xRatio, 0.3),
     yRatio: validRatio(run.yRatio, 0.52),
     explored: Math.min(100, validCount(run.explored)),
-    slots: run.slots.slice(0, 6).map(validPart),
+    slots,
+    slotIntegrity: slots.map((part, index) => part
+      ? Math.min(partDurability(part), validIntegrity(savedIntegrity[index], partDurability(part)))
+      : 0),
   }
+}
+
+function validIntegrity(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback
 }
 
 function validRatio(value: unknown, fallback: number): number {

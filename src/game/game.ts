@@ -2,6 +2,7 @@ import {
   calculateMass,
   calculatePower,
   movementScale,
+  partDurability,
   readSave,
   writeSave,
   type DefenseKind,
@@ -78,6 +79,9 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     { length: 6 },
     (_, index) => restoredRun?.slots[index] ?? (index === 0 ? ADD_ONE : null),
   )
+  let slotIntegrity = slots.map((part, index) => part
+    ? restoredRun?.slotIntegrity[index] ?? partDurability(part)
+    : 0)
   let pendingPart: ShipPart | null = null
   let deliveryPart: ShipPart | null = null
   let pendingSelected = false
@@ -134,6 +138,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       yRatio: player.y / WORLD.h,
       explored,
       slots: slots.map((part) => part ? { ...part } : null),
+      slotIntegrity: [...slotIntegrity],
     }
     persist()
   }
@@ -155,6 +160,23 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     .every((part) => part.hp <= 0))
 
   const playerCore = () => playerModules.find((part) => part.kind === 'core')!
+
+  const damagePlayerSlot = (index: number, damage: number) => {
+    const part = slots[index]
+    if (!part) return
+    slotIntegrity[index] = Math.max(0, slotIntegrity[index] - damage)
+    if (slotIntegrity[index] > 0) return
+    const destroyed = partLabel(part)
+    slots[index] = null
+    message = `${destroyed} 부품 파괴 · 연결 효과 상실`
+    const unlocked = unlockedSocketCount(slots)
+    for (let orphan = unlocked; orphan < slots.length; orphan += 1) {
+      if (!slots[orphan]) continue
+      slots[orphan] = null
+      slotIntegrity[orphan] = 0
+      message = `${destroyed} 파괴 · 바깥 연결 부품도 분리됨`
+    }
+  }
 
   const damageEnemyPart = (part: EnemyModule, damage: number) => {
     if (part.kind === 'core' && !coreExposed()) {
@@ -240,6 +262,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const resetRun = () => {
     phase = 'void'
     slots = [ADD_ONE, null, null, null, null, null]
+    slotIntegrity = [partDurability(ADD_ONE), 0, 0, 0, 0, 0]
     pendingPart = null
     player = { x: WORLD.w * 0.5, y: WORLD.h * 0.5 }
     playerModules = createPlayerModules()
@@ -282,6 +305,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const selectSocket = (index: number) => {
     if (!pendingPart || !pendingSelected || slots[index] || index >= unlockedSocketCount(slots)) return
     slots[index] = pendingPart
+    slotIntegrity[index] = partDurability(pendingPart)
     pendingPart = null
     pendingSelected = false
     overflowPulse = calculatePower(2, slots) >= 10 ? 1.8 : 0.6
@@ -511,6 +535,9 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     }
     if (defenses.includes('repair') && equipmentTimers.repair <= 0) {
       playerModules.forEach((part) => { part.hp = Math.min(part.maxHp, part.hp + 6) })
+      slots.forEach((part, index) => {
+        if (part) slotIntegrity[index] = Math.min(partDurability(part), slotIntegrity[index] + 5)
+      })
       equipmentTimers.repair = 4.8
     }
 
@@ -568,23 +595,20 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       // Shots leave the surviving gun modules, so tearing them off visibly thins the fire.
       const guns = enemy.modules.filter((part) => part.kind === 'gun' && part.hp > 0)
       const origins = guns.length ? guns.map(modulePosition) : [{ x: enemy.x, y: enemy.y }]
-      const spread = phase === 'boss' ? 0.16 : 0
-      const shotSpeed = phase === 'boss' ? 330 : 290
-      const damage = phase === 'boss' ? 12 : 9
+      const shotSpeed = phase === 'boss' ? 220 : 260
+      const damage = phase === 'boss' ? 18 : 9
       for (const origin of origins) {
-        for (const offset of spread ? [-spread, 0, spread] : [0]) {
-          enemyBullets.push({
-            x: origin.x,
-            y: origin.y,
-            vx: Math.cos(enemy.heading + offset) * shotSpeed,
-            vy: Math.sin(enemy.heading + offset) * shotSpeed,
-            damage,
-            life: 4,
-          })
-        }
+        enemyBullets.push({
+          x: origin.x,
+          y: origin.y,
+          vx: Math.cos(enemy.heading) * shotSpeed,
+          vy: Math.sin(enemy.heading) * shotSpeed,
+          damage,
+          life: 4,
+        })
       }
       enemyAttackTimer = guns.length
-        ? (phase === 'boss' ? 1.5 : 1.9)
+        ? (phase === 'boss' ? 2.4 : 1.9)
         : (phase === 'boss' ? 2.8 : 3.4)
     }
 
@@ -602,6 +626,16 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
           shieldFlash = 0.35
           return false
         }
+      }
+      const slotHit = slots.findIndex((part, index) => {
+        if (!part || slotIntegrity[index] <= 0) return false
+        const pos = rotatedOffsetPosition(SOCKETS[index], player, heading)
+        return Math.hypot(pos.x - shot.x, pos.y - shot.y) <= 14
+      })
+      if (slotHit >= 0) {
+        damagePlayerSlot(slotHit, shot.damage)
+        flash = 0.2
+        return false
       }
       const hit = playerModules.find((part) => {
         if (part.hp <= 0) return false
@@ -821,28 +855,32 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.arc(0, 0, 3.6, 0, Math.PI * 2)
     ctx.fill()
 
-    // Installed operator parts sit in their sockets and keep their glyph upright.
+    // Installed parts are physical targets; their small bars expose remaining integrity.
     for (let index = 0; index < SOCKETS.length; index += 1) {
       const part = slots[index]
       if (!part) continue
       const socket = SOCKETS[index]
-      const partColor = part.kind === 'multiply' ? AMBER : CYAN
+      const color = partColor(part)
       ctx.save()
       ctx.translate(socket.x, socket.y)
       ctx.fillStyle = '#08191f'
-      ctx.strokeStyle = partColor
+      ctx.strokeStyle = color
       ctx.lineWidth = 1.8
-      ctx.shadowColor = partColor
+      ctx.shadowColor = color
       ctx.shadowBlur = 8
       ctx.fillRect(-11, -11, 22, 22)
       ctx.strokeRect(-11, -11, 22, 22)
       ctx.shadowBlur = 0
       ctx.rotate(-heading)
-      ctx.fillStyle = partColor
+      ctx.fillStyle = color
       ctx.font = '700 11px ui-monospace, monospace'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       ctx.fillText(partLabel(part), 0, 0)
+      ctx.fillStyle = '#182329'
+      ctx.fillRect(-11, 14, 22, 3)
+      ctx.fillStyle = slotIntegrity[index] / partDurability(part) > 0.35 ? color : RED
+      ctx.fillRect(-11, 14, 22 * slotIntegrity[index] / partDurability(part), 3)
       ctx.restore()
     }
     ctx.restore()
@@ -1355,11 +1393,15 @@ function createPlayerModules(): PlayerModule[] {
 }
 
 function playerModulePosition(part: PlayerModule, player: Point, heading: number): Point {
+  return rotatedOffsetPosition(part.offset, player, heading)
+}
+
+function rotatedOffsetPosition(offset: Point, origin: Point, heading: number): Point {
   const cos = Math.cos(heading)
   const sin = Math.sin(heading)
   return {
-    x: player.x + part.offset.x * cos - part.offset.y * sin,
-    y: player.y + part.offset.x * sin + part.offset.y * cos,
+    x: origin.x + offset.x * cos - offset.y * sin,
+    y: origin.y + offset.x * sin + offset.y * cos,
   }
 }
 
