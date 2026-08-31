@@ -32,7 +32,8 @@ type EnemyModule = {
   maxHp: number
 }
 type Bullet = { x: number; y: number; targetId: string; speed: number; damage: number }
-type Telegraph = { x: number; y: number; radius: number; timer: number; maxTimer: number }
+type EnemyBullet = { x: number; y: number; vx: number; vy: number; damage: number; life: number }
+type Stick = { pointerId: number; originX: number; originY: number; x: number; y: number }
 
 const ADD_ONE: OperatorPart = { kind: 'add', value: 1, mass: 2 }
 const ADD_THREE: OperatorPart = { kind: 'add', value: 3, mass: 3 }
@@ -41,6 +42,9 @@ const CYAN = '#65f5ed'
 const AMBER = '#ffbd59'
 const RED = '#ff5268'
 const INK = '#071016'
+const WORLD = { w: 4200, h: 4200 }
+const HULL_RADIUS = 24
+const STICK_RADIUS = 62
 
 export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const ctx = canvas.getContext('2d')
@@ -49,21 +53,31 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   let width = 1280
   let height = 720
   let phase: Phase = 'void'
-  let save: SaveData = readSave(window.localStorage)
-  let slots: Array<OperatorPart | null> = [ADD_ONE, null, null, null]
+  const storage = safeStorage()
+  let save: SaveData = readSave(storage)
+  const restoredRun = save.safeRun
+  let slots: Array<OperatorPart | null> = Array.from(
+    { length: 4 },
+    (_, index) => restoredRun?.slots[index] ?? (index === 0 ? ADD_ONE : null),
+  )
   let pendingPart: OperatorPart | null = null
-  let player = { x: 330, y: 360, hp: 100 }
+  let player = {
+    x: WORLD.w * (restoredRun?.xRatio ?? 0.5),
+    y: WORLD.h * (restoredRun?.yRatio ?? 0.5),
+    hp: 100,
+  }
+  let heading = -Math.PI / 2
+  let thrust = 0
   let enemy: { x: number; y: number; name: string; modules: EnemyModule[] } | null = null
   let targetId = ''
   let bullets: Bullet[] = []
-  let telegraphs: Telegraph[] = []
+  let enemyBullets: EnemyBullet[] = []
   let fireTimer = 0
   let enemyAttackTimer = 1.2
-  let explored = 0
+  let explored = restoredRun?.explored ?? 0
   let idleTime = 4
   let cloaked = true
-  let pointerTarget: Point | null = null
-  let pointerDown = false
+  let stick: Stick | null = null
   let deliveryTimer = 0
   let overflowPulse = 0
   let flash = 0
@@ -84,12 +98,28 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       width = nextWidth
       height = nextHeight
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
-      player.x = Math.min(player.x, width - 50)
-      player.y = Math.min(player.y, height - 80)
     }
   }
 
-  const persist = () => writeSave(save, window.localStorage)
+  const persist = () => writeSave(save, storage)
+
+  const persistSafeRun = () => {
+    save.safeRun = {
+      xRatio: player.x / WORLD.w,
+      yRatio: player.y / WORLD.h,
+      explored,
+      slots: slots.map((part) => part ? { ...part } : null),
+    }
+    persist()
+  }
+
+  // The ship stays locked to the middle of the screen; the world scrolls past it.
+  const screenToWorld = (point: Point): Point => ({
+    x: point.x - width / 2 + player.x,
+    y: point.y - height / 2 + player.y,
+  })
+
+  const applyCamera = () => ctx.translate(width / 2 - player.x, height / 2 - player.y)
 
   const modulePosition = (part: EnemyModule): Point => ({
     x: (enemy?.x ?? 0) + part.offset.x,
@@ -112,12 +142,12 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   const beginElite = () => {
     phase = 'elite'
-    player.x = Math.max(90, width * 0.23)
-    player.y = height * 0.52
+    cloaked = false
     player.hp = 100
+    heading = 0
     enemy = {
-      x: width * 0.72,
-      y: height * 0.48,
+      x: player.x + 430,
+      y: player.y - 20,
       name: '미지 정예기체 // WARDEN',
       modules: [
         { id: 'elite-guard', kind: 'guard', offset: { x: -62, y: 0 }, hp: 160, maxHp: 160 },
@@ -127,19 +157,19 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     }
     targetId = 'elite-guard'
     bullets = []
-    telegraphs = []
+    enemyBullets = []
     enemyAttackTimer = 1.1
     message = '보호 모듈을 먼저 파괴하세요'
   }
 
   const beginBoss = () => {
     phase = 'boss'
-    player.x = Math.max(90, width * 0.22)
-    player.y = height * 0.5
+    cloaked = false
     player.hp = 100
+    heading = 0
     enemy = {
-      x: width * 0.74,
-      y: height * 0.48,
+      x: player.x + 460,
+      y: player.y - 20,
       name: 'MAIN SIGNAL // LIMIT BREAKER',
       modules: [
         { id: 'boss-guard-a', kind: 'guard', offset: { x: -72, y: -45 }, hp: 150, maxHp: 150 },
@@ -150,14 +180,14 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     }
     targetId = 'boss-guard-a'
     bullets = []
-    telegraphs = []
+    enemyBullets = []
     enemyAttackTimer = 0.9
     message = '두 보호 모듈이 코어를 가리고 있습니다'
   }
 
   const finishCombat = () => {
     bullets = []
-    telegraphs = []
+    enemyBullets = []
     enemy = null
     if (phase === 'elite') {
       save.scrap += 10
@@ -178,15 +208,18 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     phase = 'void'
     slots = [ADD_ONE, null, null, null]
     pendingPart = null
-    player = { x: width * 0.3, y: height * 0.52, hp: 100 }
+    player = { x: WORLD.w * 0.5, y: WORLD.h * 0.5, hp: 100 }
+    heading = -Math.PI / 2
     enemy = null
     targetId = ''
     bullets = []
-    telegraphs = []
+    enemyBullets = []
     explored = 0
     idleTime = 4
     cloaked = true
-    pointerTarget = null
+    stick = null
+    save.safeRun = null
+    persist()
     message = '이동하여 미지 신호를 탐색하세요'
   }
 
@@ -195,6 +228,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     explored = 100
     idleTime = 4
     cloaked = true
+    persistSafeRun()
     message = '클로킹 완료 · 공백 상점을 이용하세요'
   }
 
@@ -215,11 +249,11 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   }
 
   const buyAmplifier = () => {
-    if (save.scrap < 8) {
+    if (save.scrap < 6) {
       message = '스크랩이 부족합니다'
       return
     }
-    save.scrap -= 8
+    save.scrap -= 6
     persist()
     phase = 'delivery'
     deliveryTimer = 0
@@ -241,11 +275,12 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   const selectEnemyModule = (point: Point): boolean => {
     if (!enemy || (phase !== 'elite' && phase !== 'boss')) return false
+    const world = screenToWorld(point)
     const selected = enemy.modules
       .filter((part) => part.hp > 0)
       .find((part) => {
         const pos = modulePosition(part)
-        return Math.hypot(point.x - pos.x, point.y - pos.y) < 38
+        return Math.hypot(world.x - pos.x, world.y - pos.y) < 38
       })
     if (!selected) return false
     if (selected.kind === 'core' && !coreExposed()) {
@@ -258,6 +293,9 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     return true
   }
 
+  // Touch drives a floating stick in the lower-left; a mouse never steers the ship.
+  const inStickZone = (point: Point) => point.x < width * 0.5 && point.y > height * 0.45
+
   const onPointerDown = (event: PointerEvent) => {
     const point = pointFromEvent(event)
     const hit = [...buttons].reverse().find((button) => inside(point, button))
@@ -265,19 +303,25 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       hit.action()
       return
     }
-    if (selectEnemyModule(point)) return
-    if (phase === 'void' || phase === 'elite' || phase === 'boss') {
-      pointerDown = true
-      pointerTarget = point
+    const steerable = phase === 'void' || phase === 'elite' || phase === 'boss'
+    if (event.pointerType !== 'mouse' && steerable && inStickZone(point)) {
+      stick = { pointerId: event.pointerId, originX: point.x, originY: point.y, x: point.x, y: point.y }
       canvas.setPointerCapture?.(event.pointerId)
+      return
     }
+    selectEnemyModule(point)
   }
 
   const onPointerMove = (event: PointerEvent) => {
-    if (pointerDown) pointerTarget = pointFromEvent(event)
+    if (!stick || stick.pointerId !== event.pointerId) return
+    const point = pointFromEvent(event)
+    stick.x = point.x
+    stick.y = point.y
   }
 
-  const onPointerUp = () => { pointerDown = false }
+  const onPointerUp = (event: PointerEvent) => {
+    if (stick && stick.pointerId === event.pointerId) stick = null
+  }
   const onKeyDown = (event: KeyboardEvent) => {
     keys.add(event.key.toLowerCase())
     if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(event.key.toLowerCase())) {
@@ -287,11 +331,11 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const onKeyUp = (event: KeyboardEvent) => keys.delete(event.key.toLowerCase())
   const onBlur = () => {
     keys.clear()
-    pointerDown = false
+    stick = null
     if (phase === 'void') {
       cloaked = true
       idleTime = 4
-      persist()
+      persistSafeRun()
     }
   }
   const onVisibility = () => {
@@ -316,43 +360,51 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     if (keys.has('s') || keys.has('arrowdown')) y += 1
 
     if (x || y) {
-      pointerTarget = null
       const length = Math.hypot(x, y)
       return { x: x / length, y: y / length }
     }
-    if (pointerTarget) {
-      const dx = pointerTarget.x - player.x
-      const dy = pointerTarget.y - player.y
+    if (stick) {
+      const dx = stick.x - stick.originX
+      const dy = stick.y - stick.originY
       const length = Math.hypot(dx, dy)
-      if (length > 8) return { x: dx / length, y: dy / length }
-      pointerTarget = null
+      if (length > 10) {
+        // Past the ring the stick reads as full throttle, so the thumb never has to reach.
+        const strength = Math.min(1, length / STICK_RADIUS)
+        return { x: dx / length * strength, y: dy / length * strength }
+      }
     }
     return { x: 0, y: 0 }
   }
 
   const updateMovement = (dt: number) => {
     const movement = movementVector()
-    const moving = movement.x !== 0 || movement.y !== 0
+    const throttle = Math.hypot(movement.x, movement.y)
+    const moving = throttle > 0
+    thrust += ((moving ? throttle : 0) - thrust) * Math.min(1, dt * 9)
     if (moving) {
+      // Only the hull turns — rotating the camera makes the void nauseating to read.
+      heading = turnToward(heading, Math.atan2(movement.y, movement.x), dt * 7)
       const speed = 190 * movementScale(calculateMass(slots))
-      player.x = clamp(player.x + movement.x * speed * dt, 35, width - 35)
-      player.y = clamp(player.y + movement.y * speed * dt, 92, height - 55)
+      player.x = clamp(player.x + movement.x * speed * dt, 60, WORLD.w - 60)
+      player.y = clamp(player.y + movement.y * speed * dt, 60, WORLD.h - 60)
       idleTime = 0
       cloaked = false
       if (phase === 'void' && explored < 100) {
-        explored += speed * dt * 0.28
+        explored += speed * throttle * dt * 0.28
         if (explored >= 100) {
           explored = 100
           phase = 'signal'
           save.discoveries += 1
           persist()
-          pointerTarget = null
+          stick = null
           message = '미지 신호가 항로에 나타났습니다'
         }
       }
     } else if (phase === 'void') {
+      const wasCloaked = cloaked
       idleTime += dt
       cloaked = idleTime >= 3
+      if (!wasCloaked && cloaked) persistSafeRun()
     }
   }
 
@@ -364,8 +416,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     fireTimer -= dt
     if (fireTimer <= 0) {
       bullets.push({
-        x: player.x + 22,
-        y: player.y,
+        x: player.x + Math.cos(heading) * 26,
+        y: player.y + Math.sin(heading) * 26,
         targetId: target.id,
         speed: 520,
         damage: calculatePower(2, slots),
@@ -397,33 +449,45 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
     enemyAttackTimer -= dt
     if (enemyAttackTimer <= 0) {
-      const count = phase === 'boss' ? 2 : 1
-      for (let index = 0; index < count; index += 1) {
-        telegraphs.push({
-          x: clamp(player.x + (index ? 55 : 0), 55, width - 55),
-          y: clamp(player.y + (index ? -45 : 0), 120, height - 55),
-          radius: phase === 'boss' ? 48 : 42,
-          timer: phase === 'boss' ? 0.85 : 1.05,
-          maxTimer: phase === 'boss' ? 0.85 : 1.05,
-        })
+      // Shots leave the surviving gun modules, so tearing them off visibly thins the fire.
+      const guns = enemy.modules.filter((part) => part.kind === 'gun' && part.hp > 0)
+      const origins = guns.length ? guns.map(modulePosition) : [{ x: enemy.x, y: enemy.y }]
+      const spread = phase === 'boss' ? 0.16 : 0
+      const shotSpeed = phase === 'boss' ? 330 : 290
+      const damage = phase === 'boss' ? 14 : 11
+      for (const origin of origins) {
+        const aim = Math.atan2(player.y - origin.y, player.x - origin.x)
+        for (const offset of spread ? [-spread, 0, spread] : [0]) {
+          enemyBullets.push({
+            x: origin.x,
+            y: origin.y,
+            vx: Math.cos(aim + offset) * shotSpeed,
+            vy: Math.sin(aim + offset) * shotSpeed,
+            damage,
+            life: 4,
+          })
+        }
       }
-      enemyAttackTimer = phase === 'boss' ? 2.1 : 2.7
+      enemyAttackTimer = guns.length
+        ? (phase === 'boss' ? 1.5 : 1.9)
+        : (phase === 'boss' ? 2.8 : 3.4)
     }
 
-    telegraphs = telegraphs.filter((zone) => {
-      zone.timer -= dt
-      if (zone.timer > 0) return true
-      const hitRadius = 17 + calculateMass(slots) * 0.6
-      if (Math.hypot(player.x - zone.x, player.y - zone.y) < zone.radius + hitRadius) {
-        player.hp = Math.max(0, player.hp - (phase === 'boss' ? 24 : 18))
-        flash = 0.3
-        if (player.hp <= 0) {
-          phase = 'defeat'
-          enemy = null
-          bullets = []
-          telegraphs = []
-          message = '핵심 코어가 파괴되었습니다'
-        }
+    const hitRadius = HULL_RADIUS + calculateMass(slots) * 0.5
+    enemyBullets = enemyBullets.filter((shot) => {
+      shot.x += shot.vx * dt
+      shot.y += shot.vy * dt
+      shot.life -= dt
+      if (shot.life <= 0) return false
+      if (Math.hypot(player.x - shot.x, player.y - shot.y) > hitRadius) return true
+      player.hp = Math.max(0, player.hp - shot.damage)
+      flash = 0.25
+      if (player.hp <= 0) {
+        phase = 'defeat'
+        enemy = null
+        bullets = []
+        enemyBullets = []
+        message = '핵심 코어가 파괴되었습니다'
       }
       return false
     })
@@ -461,12 +525,24 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const drawBackground = (time: number) => {
     ctx.fillStyle = '#020609'
     ctx.fillRect(0, 0, width, height)
-    for (let index = 0; index < 90; index += 1) {
-      const x = (index * 139.7 + time * (index % 3) * -0.002) % width
-      const y = (index * 71.3) % height
-      ctx.globalAlpha = 0.25 + (index % 4) * 0.12
-      ctx.fillStyle = index % 11 === 0 ? AMBER : '#bafcff'
-      ctx.fillRect(x, y, index % 7 === 0 ? 2 : 1, index % 7 === 0 ? 2 : 1)
+    // Three depths of stars scroll against the camera so movement reads without turning the view.
+    for (let layer = 0; layer < 3; layer += 1) {
+      const depth = 0.25 + layer * 0.35
+      const tile = 220 + layer * 90
+      const size = layer === 2 ? 2 : 1
+      const offsetX = -player.x * depth
+      const offsetY = -player.y * depth
+      const startX = Math.floor(-offsetX / tile) * tile + offsetX
+      const startY = Math.floor(-offsetY / tile) * tile + offsetY
+      ctx.globalAlpha = 0.2 + layer * 0.22
+      ctx.fillStyle = layer === 2 ? '#bafcff' : '#7fd3dd'
+      for (let x = startX; x < width + tile; x += tile) {
+        for (let y = startY; y < height + tile; y += tile) {
+          const jitterX = ((Math.round((x - offsetX) / tile) * 73.1) % tile + tile) % tile
+          const jitterY = ((Math.round((y - offsetY) / tile) * 151.7) % tile + tile) % tile
+          ctx.fillRect(x + jitterX * 0.6, y + jitterY * 0.6, size, size)
+        }
+      }
     }
     ctx.globalAlpha = 1
     const gradient = ctx.createRadialGradient(width * 0.55, height * 0.45, 20, width * 0.55, height * 0.45, width * 0.7)
@@ -476,44 +552,150 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.fillRect(0, 0, width, height)
   }
 
+  // Socket anchors around the core, in hull space (nose points along +x).
+  const SOCKETS: Point[] = [
+    { x: -4, y: -30 },
+    { x: -4, y: 30 },
+    { x: -34, y: -20 },
+    { x: -34, y: 20 },
+  ]
+
   const drawPlayer = () => {
     const power = calculatePower(2, slots)
-    const mass = calculateMass(slots)
     const pulse = 0.75 + Math.sin(performance.now() * 0.008) * 0.2
+    const accent = power >= 10 ? AMBER : CYAN
     ctx.save()
     ctx.translate(player.x, player.y)
-    if (cloaked) ctx.globalAlpha = 0.28 + pulse * 0.12
-    ctx.strokeStyle = power >= 10 ? AMBER : CYAN
-    ctx.shadowColor = ctx.strokeStyle
-    ctx.shadowBlur = power >= 10 ? 22 : 10
+    ctx.rotate(heading)
+    if (cloaked) ctx.globalAlpha = 0.3 + pulse * 0.14
+
+    // Engine bells and exhaust at the tail.
+    ctx.fillStyle = '#0d222b'
+    ctx.strokeStyle = '#3d6672'
+    ctx.lineWidth = 1.5
+    for (const side of [-1, 1]) {
+      ctx.fillRect(-40, side * 9 - 7, 16, 14)
+      ctx.strokeRect(-40, side * 9 - 7, 16, 14)
+      if (thrust > 0.05) {
+        ctx.fillStyle = `rgba(101,245,237,${0.25 + thrust * 0.5})`
+        ctx.beginPath()
+        ctx.moveTo(-40, side * 9 - 5)
+        ctx.lineTo(-40 - 16 * thrust - Math.random() * 7, side * 9)
+        ctx.lineTo(-40, side * 9 + 5)
+        ctx.closePath()
+        ctx.fill()
+        ctx.fillStyle = '#0d222b'
+      }
+    }
+
+    // Empty socket brackets make the expandable frame legible from the first frame.
+    for (let index = 0; index < SOCKETS.length; index += 1) {
+      const socket = SOCKETS[index]
+      ctx.strokeStyle = slots[index] ? '#4d7c86' : 'rgba(101,245,237,.28)'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(socket.x * 0.35, socket.y * 0.35)
+      ctx.lineTo(socket.x, socket.y)
+      ctx.stroke()
+      if (!slots[index]) {
+        ctx.setLineDash([3, 3])
+        ctx.strokeRect(socket.x - 9, socket.y - 9, 18, 18)
+        ctx.setLineDash([])
+      }
+    }
+
+    // Main hull.
+    ctx.strokeStyle = accent
+    ctx.shadowColor = accent
+    ctx.shadowBlur = power >= 10 ? 20 : 9
     ctx.lineWidth = 2
+    ctx.fillStyle = '#08191f'
     ctx.beginPath()
-    ctx.moveTo(26 + mass * 0.5, 0)
-    ctx.lineTo(-20 - mass, -16 - mass * 0.25)
-    ctx.lineTo(-12 - mass * 0.5, 0)
-    ctx.lineTo(-20 - mass, 16 + mass * 0.25)
+    ctx.moveTo(30, 0)
+    ctx.lineTo(10, -15)
+    ctx.lineTo(-26, -16)
+    ctx.lineTo(-32, 0)
+    ctx.lineTo(-26, 16)
+    ctx.lineTo(10, 15)
     ctx.closePath()
-    ctx.stroke()
-    ctx.fillStyle = '#081820'
     ctx.fill()
-    ctx.fillStyle = power >= 10 ? AMBER : CYAN
+    ctx.stroke()
+
+    // Fixed forward gun, always visible so the base loadout is readable.
+    ctx.fillStyle = '#0d222b'
+    ctx.strokeStyle = '#5f97a1'
+    ctx.shadowBlur = 0
+    ctx.lineWidth = 1.5
+    ctx.fillRect(14, -3.5, 22, 7)
+    ctx.strokeRect(14, -3.5, 22, 7)
+
+    // Exposed core.
+    ctx.shadowColor = accent
+    ctx.shadowBlur = 16
+    ctx.fillStyle = accent
     ctx.beginPath()
-    ctx.arc(0, 0, 7, 0, Math.PI * 2)
+    for (let index = 0; index < 6; index += 1) {
+      const angle = (index / 6) * Math.PI * 2
+      const radius = 9 + pulse
+      const px = Math.cos(angle) * radius
+      const py = Math.sin(angle) * radius
+      if (index === 0) ctx.moveTo(px, py)
+      else ctx.lineTo(px, py)
+    }
+    ctx.closePath()
     ctx.fill()
     ctx.shadowBlur = 0
-    ctx.strokeStyle = `${CYAN}66`
-    for (let index = 0; index < slots.length; index += 1) {
+    ctx.fillStyle = INK
+    ctx.beginPath()
+    ctx.arc(0, 0, 3.6, 0, Math.PI * 2)
+    ctx.fill()
+
+    // Installed operator parts sit in their sockets and keep their glyph upright.
+    for (let index = 0; index < SOCKETS.length; index += 1) {
       const part = slots[index]
       if (!part) continue
-      const px = -8 - index * 15
-      ctx.beginPath()
-      ctx.moveTo(index === 0 ? 0 : px + 11, 0)
-      ctx.lineTo(px, 0)
-      ctx.stroke()
-      ctx.fillStyle = part.kind === 'multiply' ? AMBER : CYAN
-      ctx.fillRect(px - 5, -5, 10, 10)
+      const socket = SOCKETS[index]
+      const partColor = part.kind === 'multiply' ? AMBER : CYAN
+      ctx.save()
+      ctx.translate(socket.x, socket.y)
+      ctx.fillStyle = '#08191f'
+      ctx.strokeStyle = partColor
+      ctx.lineWidth = 1.8
+      ctx.shadowColor = partColor
+      ctx.shadowBlur = 8
+      ctx.fillRect(-11, -11, 22, 22)
+      ctx.strokeRect(-11, -11, 22, 22)
+      ctx.shadowBlur = 0
+      ctx.rotate(-heading)
+      ctx.fillStyle = partColor
+      ctx.font = '700 11px ui-monospace, monospace'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(operatorLabel(part), 0, 0)
+      ctx.restore()
     }
     ctx.restore()
+  }
+
+  const drawStick = () => {
+    if (!stick) return
+    const dx = stick.x - stick.originX
+    const dy = stick.y - stick.originY
+    const length = Math.hypot(dx, dy)
+    const capped = Math.min(length, STICK_RADIUS)
+    const nx = length > 0 ? dx / length : 0
+    const ny = length > 0 ? dy / length : 0
+    ctx.strokeStyle = 'rgba(101,245,237,.35)'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(stick.originX, stick.originY, STICK_RADIUS, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.fillStyle = 'rgba(101,245,237,.22)'
+    ctx.strokeStyle = CYAN
+    ctx.beginPath()
+    ctx.arc(stick.originX + nx * capped, stick.originY + ny * capped, 26, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
   }
 
   const drawEnemy = () => {
@@ -584,23 +766,18 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       ctx.arc(bullet.x, bullet.y, 3.5, 0, Math.PI * 2)
       ctx.fill()
     }
-    ctx.shadowBlur = 0
-    for (const zone of telegraphs) {
-      const progress = 1 - zone.timer / zone.maxTimer
-      ctx.fillStyle = `rgba(255,82,104,${0.06 + progress * 0.16})`
-      ctx.strokeStyle = RED
-      ctx.lineWidth = 2 + progress * 3
-      ctx.beginPath()
-      ctx.arc(zone.x, zone.y, zone.radius, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.stroke()
-      ctx.beginPath()
-      ctx.moveTo(zone.x - 8, zone.y)
-      ctx.lineTo(zone.x + 8, zone.y)
-      ctx.moveTo(zone.x, zone.y - 8)
-      ctx.lineTo(zone.x, zone.y + 8)
-      ctx.stroke()
+    for (const shot of enemyBullets) {
+      const angle = Math.atan2(shot.vy, shot.vx)
+      ctx.save()
+      ctx.translate(shot.x, shot.y)
+      ctx.rotate(angle)
+      ctx.fillStyle = RED
+      ctx.shadowColor = RED
+      ctx.shadowBlur = 12
+      ctx.fillRect(-7, -2, 14, 4)
+      ctx.restore()
     }
+    ctx.shadowBlur = 0
   }
 
   const drawHud = () => {
@@ -777,7 +954,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.fillStyle = '#8fa5af'
     ctx.font = '11px ui-monospace, monospace'
     ctx.fillText('질량 +5 · 앞선 연산 결과를 두 배로 증폭', cardX + 16, cardY + 42)
-    addButton(panel.x + panel.w - 174, cardY + 14, 134, 44, '8 SCRAP', buyAmplifier, AMBER)
+    addButton(panel.x + panel.w - 174, cardY + 14, 134, 44, '6 SCRAP', buyAmplifier, AMBER)
     addButton(panel.x + 24, panel.y + panel.h - 58, 120, 36, '닫기', () => {
       phase = 'void'
       message = '상점 연결 종료'
@@ -823,6 +1000,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const draw = (time: number) => {
     buttons = []
     drawBackground(time)
+    ctx.save()
+    applyCamera()
     if (!['signal', 'reward', 'shop', 'assembly', 'bossIntro', 'victory', 'defeat'].includes(phase)) {
       drawPlayer()
     }
@@ -832,11 +1011,13 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       if (enemy) {
         ctx.fillStyle = '#d9e9ed'
         ctx.textAlign = 'center'
-        ctx.textBaseline = 'top'
+        ctx.textBaseline = 'bottom'
         ctx.font = '700 12px ui-monospace, monospace'
-        ctx.fillText(enemy.name, enemy.x, 104)
+        ctx.fillText(enemy.name, enemy.x, enemy.y - 96)
       }
     }
+    ctx.restore()
+    drawStick()
     if (phase === 'void') drawVoidUi()
     if (phase === 'signal') drawSignal()
     if (phase === 'reward') drawReward()
@@ -890,6 +1071,14 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
+// Rotates along the short arc so the hull never spins the long way round.
+function turnToward(current: number, target: number, rate: number): number {
+  let delta = (target - current) % (Math.PI * 2)
+  if (delta > Math.PI) delta -= Math.PI * 2
+  if (delta < -Math.PI) delta += Math.PI * 2
+  return current + delta * Math.min(1, rate)
+}
+
 function moduleLabel(kind: ModuleKind): string {
   if (kind === 'guard') return '보호 모듈'
   if (kind === 'gun') return '무기 모듈'
@@ -898,4 +1087,12 @@ function moduleLabel(kind: ModuleKind): string {
 
 function operatorLabel(part: OperatorPart): string {
   return part.kind === 'add' ? `+${part.value}` : `×${part.value}`
+}
+
+function safeStorage(): Storage | undefined {
+  try {
+    return window.localStorage
+  } catch {
+    return undefined
+  }
 }

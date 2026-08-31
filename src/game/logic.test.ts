@@ -42,13 +42,35 @@ describe('local save', () => {
       scrap: 4,
       discoveries: 0,
       victories: 0,
+      safeRun: null,
     })
 
     let written = ''
     writeSave(
-      { scrap: 9, discoveries: 2, victories: 1 },
+      { scrap: 9, discoveries: 2, victories: 1, safeRun: null },
       { setItem: (key, value) => { written = `${key}:${value}` } },
     )
-    expect(written).toBe(`${SAVE_KEY}:{"scrap":9,"discoveries":2,"victories":1}`)
+    expect(written).toBe(`${SAVE_KEY}:{"scrap":9,"discoveries":2,"victories":1,"safeRun":null}`)
+  })
+
+  it('restores a safe run and ignores storage write failures', () => {
+    const restored = readSave({
+      getItem: () => JSON.stringify({
+        safeRun: {
+          xRatio: 0.4,
+          yRatio: 0.6,
+          explored: 75,
+          slots: [{ kind: 'add', value: 3, mass: 3 }, { kind: 'unknown' }],
+        },
+      }),
+    })
+
+    expect(restored.safeRun).toEqual({
+      xRatio: 0.4,
+      yRatio: 0.6,
+      explored: 75,
+      slots: [{ kind: 'add', value: 3, mass: 3 }, null],
+    })
+    expect(() => writeSave(restored, { setItem: () => { throw new Error('blocked') } })).not.toThrow()
   })
 })
