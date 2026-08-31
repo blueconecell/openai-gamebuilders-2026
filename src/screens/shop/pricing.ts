@@ -8,6 +8,8 @@ export type ShopItem = {
   cost: number
   /** Present when the goods occupy an operator socket. */
   part?: OperatorPart
+  /** Hull integrity restored on delivery — the currency that buys back a respawn. */
+  integrity?: number
 }
 
 export type PurchasePreview = {
@@ -37,8 +39,9 @@ export const DEFAULT_SHOP_ITEMS: ShopItem[] = [
   {
     id: 'repair-kit',
     name: '수리 키트',
-    detail: '다음 조우 시작 시 선체를 완전히 복구합니다.',
+    detail: '손상된 선체를 복구해 무결성을 1 회복합니다. 소켓을 쓰지 않습니다.',
     cost: 3,
+    integrity: 1,
   },
 ]
 

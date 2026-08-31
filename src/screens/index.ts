@@ -8,5 +8,6 @@ export {
   type ShopItem,
 } from './shop/pricing'
 export { createResultScreen, type ResultProps } from './result/result'
+export { isRunOver, penaltyLines, type PenaltyLine, type RunPenalty } from './result/penalty'
 export { ensureScreenStyles } from './styles'
 export type { ScreenHandle, ShipSlots } from './screen'

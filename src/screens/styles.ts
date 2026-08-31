@@ -94,6 +94,7 @@ const CSS = `
 }
 
 .gb-stat dd.is-amber { color: var(--gb-amber); }
+.gb-stat dd.is-danger { color: var(--gb-danger); }
 
 .gb-actions {
   display: grid;
@@ -171,6 +172,18 @@ const CSS = `
 .gb-readout-row b { font-weight: 700; }
 .gb-readout-row b.is-amber { color: var(--gb-amber); }
 .gb-readout-row b.is-danger { color: var(--gb-danger); }
+.gb-readout-row b.is-keep { color: var(--gb-cyan); }
+
+.gb-pips { display: inline-flex; gap: 4px; }
+
+.gb-pips i {
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--gb-cyan);
+  background: var(--gb-cyan);
+}
+
+.gb-pips i.is-spent { background: transparent; border-color: #3a4d59; }
 
 .gb-goods { display: grid; gap: 10px; }
 

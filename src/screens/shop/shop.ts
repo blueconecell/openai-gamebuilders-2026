@@ -5,6 +5,9 @@ import { canPurchase, previewPurchase, type PurchasePreview, type ShopItem } fro
 export type ShopProps = {
   slots: ShipSlots
   scrap: number
+  /** Remaining hull integrity, so repair goods can show what they buy back. */
+  integrity: number
+  integrityMax: number
   items: ShopItem[]
   /** Set while a warp capsule is inbound so the screen can show the delivery notice. */
   delivering?: string
@@ -42,14 +45,26 @@ export function createShopScreen(props: ShopProps): ScreenHandle<ShopProps> {
     head.append(eyebrow, title)
 
     const stats = element('dl', 'gb-stats')
-    stats.append(statBlock('보유 SCRAP', `${current.scrap}`))
+    stats.append(
+      statBlock('보유 SCRAP', `${current.scrap}`, 'is-amber'),
+      statBlock(
+        '무결성',
+        `${current.integrity} / ${current.integrityMax}`,
+        current.integrity <= 1 ? 'is-danger' : '',
+      ),
+    )
 
     const note = element('p', 'gb-note')
     note.textContent = '구매한 물품은 인벤토리로 들어오지 않습니다. 배송 캡슐이 워프해 우주선 근처에 도착하고 즉시 열립니다.'
 
     const goods = element('div', 'gb-goods')
     for (const item of current.items) {
-      goods.appendChild(goodCard(item, previewPurchase(item, current.slots, current.scrap)))
+      goods.appendChild(goodCard(
+        item,
+        previewPurchase(item, current.slots, current.scrap),
+        current.integrity,
+        current.integrityMax,
+      ))
     }
 
     const actions = element('div', 'gb-actions')
@@ -75,7 +90,12 @@ export function createShopScreen(props: ShopProps): ScreenHandle<ShopProps> {
   }
 }
 
-function goodCard(item: ShopItem, preview: PurchasePreview): HTMLElement {
+function goodCard(
+  item: ShopItem,
+  preview: PurchasePreview,
+  integrity: number,
+  integrityMax: number,
+): HTMLElement {
   const purchasable = canPurchase(preview)
   const card = element('article', `gb-good ${purchasable ? '' : 'is-locked'}`.trim())
 
@@ -95,6 +115,14 @@ function goodCard(item: ShopItem, preview: PurchasePreview): HTMLElement {
       deltaRow('화력', `${preview.power.before} → ${preview.power.after}`, formatSigned(preview.power.delta), 'is-amber'),
       deltaRow('질량', `${preview.mass.before} → ${preview.mass.after}`, formatSigned(preview.mass.delta), 'is-danger'),
     )
+  } else if (item.integrity) {
+    const restored = Math.min(integrityMax, integrity + item.integrity)
+    delta.append(deltaRow(
+      '무결성',
+      `${integrity} → ${restored} / ${integrityMax}`,
+      restored > integrity ? formatSigned(item.integrity) : '이미 최대',
+      'is-amber',
+    ))
   } else {
     delta.append(deltaRow('능력 변화', '선체 유지', '소켓 미사용'))
   }
@@ -124,11 +152,11 @@ function deltaRow(label: string, value: string, change: string, modifier = ''): 
   return row
 }
 
-function statBlock(label: string, value: string): HTMLElement {
+function statBlock(label: string, value: string, modifier = ''): HTMLElement {
   const wrap = element('div', 'gb-stat')
   const term = element('dt')
   term.textContent = label
-  const detail = element('dd', 'is-amber')
+  const detail = element('dd', modifier)
   detail.textContent = value
   wrap.append(term, detail)
   return wrap

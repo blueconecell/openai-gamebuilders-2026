@@ -7,6 +7,9 @@ export type LobbyProps = {
   scrap: number
   discoveries: number
   victories: number
+  /** Remaining hull integrity — the run's lives. Reaching zero ends the exploration. */
+  integrity: number
+  integrityMax: number
   /** A saved run exists; when absent 이어하기 is unavailable. */
   canContinue: boolean
   onNewRun(): void
@@ -46,6 +49,7 @@ export function createLobbyScreen(props: LobbyProps): ScreenHandle<LobbyProps> {
       readoutRow('질량', `${ship.mass}`, ship.overloaded ? 'is-danger' : ''),
       readoutRow('소켓', `${ship.installed} / ${current.slots.length}`),
       readoutRow('상태', ship.overloaded ? '과적' : '안정', ship.overloaded ? 'is-danger' : ''),
+      integrityRow(current.integrity, current.integrityMax),
     )
     hangar.appendChild(readout)
 
@@ -79,6 +83,21 @@ export function createLobbyScreen(props: LobbyProps): ScreenHandle<LobbyProps> {
       el.remove()
     },
   }
+}
+
+/** Integrity reads as pips rather than a number so remaining lives are countable at a glance. */
+function integrityRow(integrity: number, max: number): HTMLElement {
+  const row = element('div', 'gb-readout-row')
+  const label = element('span')
+  label.textContent = '무결성'
+  const pips = element('b', 'gb-pips')
+  for (let index = 0; index < max; index += 1) {
+    const pip = element('i', index < integrity ? '' : 'is-spent')
+    pips.appendChild(pip)
+  }
+  pips.setAttribute('aria-label', `무결성 ${integrity} / ${max}`)
+  row.append(label, pips)
+  return row
 }
 
 function readoutRow(label: string, value: string, modifier = ''): HTMLElement {
