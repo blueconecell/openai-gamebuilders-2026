@@ -27,7 +27,7 @@ type Phase =
   | 'defeat'
 
 type Point = { x: number; y: number }
-type Button = { x: number; y: number; w: number; h: number; action: () => void }
+type Button = { x: number; y: number; w: number; h: number; action: () => void; hoverText?: string }
 type ModuleKind = 'guard' | 'gun' | 'core'
 type Zone = { x: number; y: number; radius: number; label: string; risk: string }
 type EnemyModule = {
@@ -63,6 +63,12 @@ const WORLD = { w: 4200, h: 4200 }
 const STICK_RADIUS = 62
 const ZOOM = 0.72
 const SENSOR_RANGE = 920
+const GRID_WORLD_SIZE = 120
+const CRUISE_SPEED = 112
+const BOOST_SPEED = 185
+const BOOST_DURATION = 0.45
+const BOOST_COOLDOWN = 2.6
+const WARP_DURATION = 1.25
 const UNKNOWN_ZONE: Zone = { x: 2920, y: 1900, radius: 155, label: 'UNKNOWN // WARDEN', risk: '■■■□□' }
 const BOSS_ZONE: Zone = { x: 3580, y: 820, radius: 190, label: 'MAIN // LIMIT BREAKER', risk: '■■■■■' }
 
@@ -95,6 +101,10 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   let heading = -Math.PI / 2
   let velocity: Point = { x: 0, y: 0 }
   let thrust = 0
+  let boostTime = 0
+  let boostCooldown = 0
+  let warpTimer = 0
+  let warpDestination: Point | null = null
   let enemy: EnemyShip | null = null
   let bullets: Bullet[] = []
   let mines: Mine[] = []
@@ -110,6 +120,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   let idleTime = 4
   let cloaked = true
   let stick: Stick | null = null
+  let hoverPoint: Point | null = null
   let deliveryTimer = 0
   let overflowPulse = 0
   let flash = 0
@@ -336,14 +347,14 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   }
 
   const warpNearBoss = () => {
-    player.x = BOSS_ZONE.x - 760
-    player.y = BOSS_ZONE.y + 180
-    heading = -0.22
     velocity = { x: 0, y: 0 }
+    boostTime = 0
     idleTime = 0
     cloaked = false
     phase = 'void'
-    message = '워프 완료 · 메인 신호까지 직접 접근하세요'
+    warpTimer = WARP_DURATION
+    warpDestination = { x: BOSS_ZONE.x - 760, y: BOSS_ZONE.y + 180 }
+    message = 'WARP 좌표 고정 · 공간 도약 중'
   }
 
   const selectSocket = (index: number) => {
@@ -409,8 +420,9 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   }
 
   const onPointerMove = (event: PointerEvent) => {
+    hoverPoint = pointFromEvent(event)
     if (!stick || stick.pointerId !== event.pointerId) return
-    const point = pointFromEvent(event)
+    const point = hoverPoint
     stick.x = point.x
     stick.y = point.y
   }
@@ -418,18 +430,21 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const onPointerUp = (event: PointerEvent) => {
     if (stick && stick.pointerId === event.pointerId) stick = null
   }
+  const onPointerLeave = () => { hoverPoint = null }
   const onKeyDown = (event: KeyboardEvent) => {
     const code = event.code.toLowerCase()
     keys.add(code)
     if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'space'].includes(code)) {
       event.preventDefault()
     }
+    if (!event.repeat && ['space', 'shiftleft', 'shiftright'].includes(code)) triggerBoost()
   }
   const onKeyUp = (event: KeyboardEvent) => keys.delete(event.code.toLowerCase())
   const onBlur = () => {
     keys.clear()
     stick = null
     velocity = { x: 0, y: 0 }
+    boostTime = 0
     if (phase === 'void') {
       cloaked = true
       idleTime = 4
@@ -444,6 +459,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   canvas.addEventListener('pointermove', onPointerMove)
   canvas.addEventListener('pointerup', onPointerUp)
   canvas.addEventListener('pointercancel', onPointerUp)
+  canvas.addEventListener('pointerleave', onPointerLeave)
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('keyup', onKeyUp)
   window.addEventListener('blur', onBlur)
@@ -474,21 +490,48 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     return { x: 0, y: 0 }
   }
 
+  const triggerBoost = () => {
+    const steerable = phase === 'void' || phase === 'elite' || phase === 'boss'
+    if (!steerable || boostCooldown > 0 || warpTimer > 0) return
+    const movement = movementVector()
+    const hasDirection = Math.hypot(movement.x, movement.y) > 0.05
+    const angle = hasDirection ? Math.atan2(movement.y, movement.x) : heading
+    const massScale = movementScale(calculateMass(slots))
+    velocity.x += Math.cos(angle) * 86 * massScale
+    velocity.y += Math.sin(angle) * 86 * massScale
+    const speed = Math.hypot(velocity.x, velocity.y)
+    const boostLimit = BOOST_SPEED * massScale
+    if (speed > boostLimit) {
+      velocity.x = velocity.x / speed * boostLimit
+      velocity.y = velocity.y / speed * boostLimit
+    }
+    heading = angle
+    boostTime = BOOST_DURATION
+    boostCooldown = BOOST_COOLDOWN
+    thrust = 1
+    idleTime = 0
+    cloaked = false
+    message = 'BOOST 점화 · 속도 상한 일시 해제'
+  }
+
   const updateMovement = (dt: number) => {
     const movement = movementVector()
     const throttle = Math.hypot(movement.x, movement.y)
     const accelerating = throttle > 0
     thrust += ((accelerating ? throttle : 0) - thrust) * Math.min(1, dt * 6)
-    const maxSpeed = 112 * movementScale(calculateMass(slots))
+    const massScale = movementScale(calculateMass(slots))
+    const maxSpeed = (boostTime > 0 ? BOOST_SPEED : CRUISE_SPEED) * massScale
     if (accelerating) {
       // Only the hull turns — rotating the camera makes the void nauseating to read.
       heading = turnToward(heading, Math.atan2(movement.y, movement.x), dt * 7)
-      velocity.x += movement.x * 155 * dt
-      velocity.y += movement.y * 155 * dt
+      const acceleration = boostTime > 0 ? 225 : 155
+      velocity.x += movement.x * acceleration * dt
+      velocity.y += movement.y * acceleration * dt
       const speed = Math.hypot(velocity.x, velocity.y)
       if (speed > maxSpeed) {
-        velocity.x = velocity.x / speed * maxSpeed
-        velocity.y = velocity.y / speed * maxSpeed
+        const limitedSpeed = boostTime > 0 ? maxSpeed : Math.max(maxSpeed, speed - 72 * dt)
+        velocity.x = velocity.x / speed * limitedSpeed
+        velocity.y = velocity.y / speed * limitedSpeed
       }
       idleTime = 0
       cloaked = false
@@ -737,7 +780,18 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     shieldFlash = Math.max(0, shieldFlash - dt)
     collisionTimer = Math.max(0, collisionTimer - dt)
     overflowPulse = Math.max(0, overflowPulse - dt)
-    if (phase === 'void') updateMovement(dt)
+    boostTime = Math.max(0, boostTime - dt)
+    boostCooldown = Math.max(0, boostCooldown - dt)
+    if (warpTimer > 0) {
+      const previousWarpTime = warpTimer
+      warpTimer = Math.max(0, warpTimer - dt)
+      if (previousWarpTime > WARP_DURATION / 2 && warpTimer <= WARP_DURATION / 2 && warpDestination) {
+        player = { ...warpDestination }
+        heading = -0.22
+        warpDestination = null
+      }
+      if (warpTimer <= 0) message = '워프 완료 · 메인 신호까지 직접 접근하세요'
+    } else if (phase === 'void') updateMovement(dt)
     if (phase === 'elite' || phase === 'boss') updateCombat(dt)
     if (phase === 'delivery') {
       deliveryTimer += dt
@@ -751,10 +805,12 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     }
   }
 
-  const addButton = (x: number, y: number, w: number, h: number, label: string, action: () => void, accent = CYAN) => {
-    ctx.fillStyle = `${accent}18`
+  const addButton = (x: number, y: number, w: number, h: number, label: string, action: () => void, accent = CYAN, hoverText?: string) => {
+    const button = { x, y, w, h, action, hoverText }
+    const hovered = hoverPoint ? inside(hoverPoint, button) : false
+    ctx.fillStyle = `${accent}${hovered ? '30' : '18'}`
     ctx.strokeStyle = accent
-    ctx.lineWidth = 1
+    ctx.lineWidth = hovered ? 2 : 1
     ctx.fillRect(x, y, w, h)
     ctx.strokeRect(x, y, w, h)
     ctx.fillStyle = accent
@@ -762,12 +818,42 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(label, x + w / 2, y + h / 2)
-    buttons.push({ x, y, w, h, action })
+    buttons.push(button)
   }
 
   const drawBackground = (time: number) => {
     ctx.fillStyle = '#020609'
     ctx.fillRect(0, 0, width, height)
+    // The grid belongs to world space, so acceleration is readable as faster line movement.
+    const leftWorld = player.x - width / (2 * ZOOM)
+    const rightWorld = player.x + width / (2 * ZOOM)
+    const topWorld = player.y - height / (2 * ZOOM)
+    const bottomWorld = player.y + height / (2 * ZOOM)
+    const firstColumn = Math.floor(leftWorld / GRID_WORLD_SIZE)
+    const lastColumn = Math.ceil(rightWorld / GRID_WORLD_SIZE)
+    const firstRow = Math.floor(topWorld / GRID_WORLD_SIZE)
+    const lastRow = Math.ceil(bottomWorld / GRID_WORLD_SIZE)
+    const gridPulse = 0.85 + Math.sin(time * 0.0014) * 0.1
+    for (let major = 0; major <= 1; major += 1) {
+      ctx.beginPath()
+      for (let column = firstColumn; column <= lastColumn; column += 1) {
+        if ((Math.abs(column) % 4 === 0) !== Boolean(major)) continue
+        const x = width / 2 + (column * GRID_WORLD_SIZE - player.x) * ZOOM
+        ctx.moveTo(x, 0)
+        ctx.lineTo(x, height)
+      }
+      for (let row = firstRow; row <= lastRow; row += 1) {
+        if ((Math.abs(row) % 4 === 0) !== Boolean(major)) continue
+        const y = height / 2 + (row * GRID_WORLD_SIZE - player.y) * ZOOM
+        ctx.moveTo(0, y)
+        ctx.lineTo(width, y)
+      }
+      ctx.strokeStyle = major
+        ? `rgba(101,245,237,${0.12 * gridPulse})`
+        : `rgba(101,245,237,${0.045 * gridPulse})`
+      ctx.lineWidth = major ? 1.25 : 1
+      ctx.stroke()
+    }
     // Three depths of stars scroll against the camera so movement reads without turning the view.
     for (let layer = 0; layer < 3; layer += 1) {
       const depth = 0.25 + layer * 0.35
@@ -814,7 +900,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.rotate(heading)
     if (cloaked) ctx.globalAlpha = 0.3 + pulse * 0.14
 
-    // Engine bells and exhaust at the tail.
+    // Engine bells and exhaust at the tail. Boost stretches and warms the plume briefly.
+    const boostScale = boostTime > 0 ? 2.4 : 1
     ctx.fillStyle = '#0d222b'
     ctx.strokeStyle = '#3d6672'
     ctx.lineWidth = 1.5
@@ -822,10 +909,12 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       ctx.fillRect(-40, side * 9 - 7, 16, 14)
       ctx.strokeRect(-40, side * 9 - 7, 16, 14)
       if (thrust > 0.05) {
-        ctx.fillStyle = `rgba(101,245,237,${0.25 + thrust * 0.5})`
+        ctx.fillStyle = boostTime > 0
+          ? `rgba(255,189,89,${0.35 + thrust * 0.55})`
+          : `rgba(101,245,237,${0.25 + thrust * 0.5})`
         ctx.beginPath()
         ctx.moveTo(-40, side * 9 - 5)
-        ctx.lineTo(-40 - 16 * thrust - Math.random() * 7, side * 9)
+        ctx.lineTo(-40 - (16 * thrust + Math.random() * 7) * boostScale, side * 9)
         ctx.lineTo(-40, side * 9 + 5)
         ctx.closePath()
         ctx.fill()
@@ -984,6 +1073,73 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.stroke()
   }
 
+  const drawBoostControl = () => {
+    if ((phase !== 'void' && phase !== 'elite' && phase !== 'boss') || warpTimer > 0) return
+    const ready = boostCooldown <= 0
+    const w = 88
+    const h = 54
+    const x = width - w - 22
+    const y = Math.max(100, height * 0.62 - h / 2)
+    const label = ready ? 'BOOST' : `${boostCooldown.toFixed(1)}s`
+    addButton(x, y, w, h, label, triggerBoost, ready ? AMBER : '#667982')
+    ctx.fillStyle = ready ? '#dca34f' : '#667982'
+    ctx.font = '9px ui-monospace, monospace'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'top'
+    ctx.fillText('SPACE / SHIFT', x + w / 2, y + h + 6)
+  }
+
+  const drawHoverTooltip = () => {
+    if (!hoverPoint) return
+    const hovered = [...buttons].reverse().find((button) => button.hoverText && inside(hoverPoint!, button))
+    if (!hovered?.hoverText) return
+    ctx.font = '700 11px ui-monospace, monospace'
+    const tooltipWidth = Math.min(width - 32, ctx.measureText(hovered.hoverText).width + 28)
+    const x = clamp(hovered.x + hovered.w - tooltipWidth, 16, width - tooltipWidth - 16)
+    const y = Math.max(88, hovered.y - 38)
+    ctx.fillStyle = 'rgba(18,11,8,.94)'
+    ctx.strokeStyle = AMBER
+    ctx.lineWidth = 1
+    ctx.fillRect(x, y, tooltipWidth, 28)
+    ctx.strokeRect(x, y, tooltipWidth, 28)
+    ctx.fillStyle = AMBER
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(hovered.hoverText, x + 14, y + 14)
+  }
+
+  const drawWarpEffect = (time: number) => {
+    if (warpTimer <= 0) return
+    const progress = 1 - warpTimer / WARP_DURATION
+    const intensity = Math.sin(progress * Math.PI)
+    ctx.fillStyle = `rgba(2,6,9,${0.18 + intensity * 0.58})`
+    ctx.fillRect(0, 0, width, height)
+    ctx.save()
+    ctx.translate(width / 2, height / 2)
+    ctx.strokeStyle = `rgba(101,245,237,${0.18 + intensity * 0.72})`
+    ctx.lineWidth = 1 + intensity * 2
+    for (let index = 0; index < 42; index += 1) {
+      const angle = index / 42 * Math.PI * 2 + time * 0.00012
+      const inner = 54 + (index % 5) * 13
+      const length = 90 + intensity * (150 + (index % 7) * 18)
+      ctx.beginPath()
+      ctx.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner)
+      ctx.lineTo(Math.cos(angle) * (inner + length), Math.sin(angle) * (inner + length))
+      ctx.stroke()
+    }
+    ctx.strokeStyle = `rgba(255,189,89,${0.3 + intensity * 0.7})`
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(0, 0, 44 + intensity * 34, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.fillStyle = '#d9ffff'
+    ctx.font = '700 13px ui-monospace, monospace'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(progress < 0.5 ? 'WARP // FOLDING SPACE' : 'WARP // EXIT VECTOR', 0, 0)
+    ctx.restore()
+  }
+
   const drawEnemy = () => {
     if (!enemy) return
     ctx.strokeStyle = '#294450'
@@ -1074,10 +1230,12 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const drawHud = () => {
     const power = calculatePower(2, slots)
     const mass = calculateMass(slots)
+    const speed = Math.round(Math.hypot(velocity.x, velocity.y))
+    const hudWidth = Math.min(430, width - 32)
     ctx.fillStyle = 'rgba(4,12,17,.86)'
-    ctx.fillRect(16, 16, Math.min(360, width - 32), 62)
+    ctx.fillRect(16, 16, hudWidth, 62)
     ctx.strokeStyle = '#223944'
-    ctx.strokeRect(16, 16, Math.min(360, width - 32), 62)
+    ctx.strokeRect(16, 16, hudWidth, 62)
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
     ctx.font = '700 13px ui-monospace, monospace'
@@ -1085,10 +1243,18 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.fillText(`CORE ${Math.ceil(playerCore().hp / playerCore().maxHp * 100)}%`, 30, 27)
     ctx.fillStyle = power >= 10 ? AMBER : '#d9ffff'
     ctx.fillText(`FIRE ${power}${power >= 10 ? '  // OVERFLOW' : ''}`, 130, 27)
+    ctx.textAlign = 'right'
+    ctx.fillStyle = speed > CRUISE_SPEED * movementScale(mass) ? AMBER : '#d9ffff'
+    ctx.fillText(`SPD ${speed}`, 16 + hudWidth - 14, 27)
+    ctx.textAlign = 'left'
     ctx.fillStyle = mass > 6 ? RED : '#91a9b3'
     ctx.fillText(`MASS ${mass}/6${mass > 6 ? ' 과적' : ' 안정'}`, 30, 50)
     ctx.fillStyle = AMBER
     ctx.fillText(`SCRAP ${save.scrap}`, 190, 50)
+    ctx.textAlign = 'right'
+    ctx.fillStyle = boostCooldown <= 0 ? AMBER : '#71858d'
+    ctx.fillText(boostCooldown <= 0 ? 'BST READY' : `BST ${boostCooldown.toFixed(1)}s`, 16 + hudWidth - 14, 50)
+    ctx.textAlign = 'left'
 
     ctx.fillStyle = 'rgba(4,12,17,.76)'
     ctx.fillRect(16, height - 46, Math.min(width - 32, 620), 30)
@@ -1170,7 +1336,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   const drawTutorial = () => {
     const steps = [
-      { title: 'WASD로 관성 조향', body: ['한글·영문 상태와 관계없이 같은 위치 키로 이동합니다.', '키를 놓으면 짧게 활주하고 완전히 멈추면 클로킹합니다.'] },
+      { title: '가속하고 짧게 부스트', body: ['WASD로 가속하며 속도에는 상한이 있습니다.', 'Space·Shift 또는 BOOST 버튼으로 잠시 한계를 넘습니다.'] },
       { title: '코어는 처음부터 파괴 가능', body: ['모든 기체의 붉은 CORE는 첫 탄부터 피해를 받습니다.', '외부 무기와 방어 부품을 먼저 끊는 선택도 가능합니다.'] },
       { title: '신호를 직접 찾아가기', body: ['센서 화살표의 방향과 거리를 따라 미지 구역에 접근합니다.', '경계에서 진입하거나 그대로 지나갈 수 있습니다.'] },
       { title: '선택하고 소켓에 부착', body: ['부품을 먼저 누르면 장착 가능한 연결부에 전기가 흐릅니다.', '전투가 끝나면 안전한 공백으로 자동 복귀합니다.'] },
@@ -1278,7 +1444,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       const x = width - w - 22
       addButton(x, height - 126, w, 44, '공백 상점 열기', () => { phase = 'shop' })
       if (unknownResolved) {
-        addButton(x, height - 180, w, 44, '메인 신호 근처로 워프', warpNearBoss, AMBER)
+        addButton(x, height - 180, w, 44, '메인 신호 근처로 워프', warpNearBoss, AMBER, '경고 · 메인 퀘스트 강적 출현 예상')
       }
     }
   }
@@ -1501,10 +1667,12 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       }
     }
     ctx.restore()
+    drawWarpEffect(time)
     drawStick()
+    drawBoostControl()
     if (phase === 'void') drawSensorHud()
     if (phase === 'tutorial') drawTutorial()
-    if (phase === 'void') drawVoidUi()
+    if (phase === 'void' && warpTimer <= 0) drawVoidUi()
     if (phase === 'signal') drawSignal()
     if (phase === 'reward') drawReward()
     if (phase === 'shop') drawShop()
@@ -1514,6 +1682,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     if (phase === 'victory') drawEnd(true)
     if (phase === 'defeat') drawEnd(false)
     if (phase !== 'tutorial') drawHud()
+    drawHoverTooltip()
     if (overflowPulse > 0) {
       ctx.strokeStyle = `rgba(255,189,89,${Math.min(1, overflowPulse) * 0.65})`
       ctx.lineWidth = 8
@@ -1544,6 +1713,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       canvas.removeEventListener('pointermove', onPointerMove)
       canvas.removeEventListener('pointerup', onPointerUp)
       canvas.removeEventListener('pointercancel', onPointerUp)
+      canvas.removeEventListener('pointerleave', onPointerLeave)
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
