@@ -18,7 +18,8 @@ const BASE_SOCKETS: ShipSocket[] = [
   { index: 2, x: 0, y: -46, parentIndex: null },
   { index: 3, x: 0, y: 46, parentIndex: null },
 ]
-export const MAX_SHIP_SLOTS = 40
+export const SOCKET_LAYOUT_VERSION = 2
+export const MAX_SHIP_SLOTS = 160
 
 export type SaveData = {
   scrap: number
@@ -29,6 +30,7 @@ export type SaveData = {
 }
 
 export type SafeRun = {
+  socketLayoutVersion: number
   xRatio: number
   yRatio: number
   explored: number
@@ -63,31 +65,88 @@ export function calculateMassLimit(slots: Array<ShipPart | null>): number {
 }
 
 export function isSocketUnlocked(slots: Array<ShipPart | null>, index: number): boolean {
-  return index < 4 || slots[index - 4]?.kind === 'body'
+  if (index < 0 || index >= MAX_SHIP_SLOTS) return false
+  if (index < 4) return true
+  const parentIndex = socketParentIndex(index)
+  return parentIndex !== null
+    && slots[parentIndex]?.kind === 'body'
+    && isSocketUnlocked(slots, parentIndex)
 }
 
-export function firstOpenSocket(slots: Array<ShipPart | null>): number {
-  return shipSocketLayout(slots).find((socket) => !slots[socket.index])?.index ?? -1
+export function canAttachPart(slots: Array<ShipPart | null>, index: number, part: ShipPart): boolean {
+  return isSocketUnlocked(slots, index)
+    && !slots[index]
+    && (part.kind !== 'body' || socketChildIndices(index).length === 3)
 }
 
-/** Each BODY opens one child socket farther out on the same radial branch. */
-export function shipSocketLayout(slots: Array<ShipPart | null>): ShipSocket[] {
-  const layout = BASE_SOCKETS.map((socket) => ({ ...socket }))
-  for (let parentIndex = 0; parentIndex < slots.length; parentIndex += 1) {
-    if (slots[parentIndex]?.kind !== 'body' || !isSocketUnlocked(slots, parentIndex)) continue
-    const childIndex = parentIndex + 4
-    if (childIndex >= MAX_SHIP_SLOTS) continue
-    const root = BASE_SOCKETS[childIndex % 4]
-    const distance = Math.hypot(root.x, root.y) || 1
-    const depth = Math.floor(childIndex / 4)
-    layout.push({
-      index: childIndex,
-      x: root.x + root.x / distance * 48 * depth,
-      y: root.y + root.y / distance * 48 * depth,
-      parentIndex,
-    })
+export function firstOpenSocket(slots: Array<ShipPart | null>, part?: ShipPart): number {
+  return shipSocketLayout(slots).find((socket) => part
+    ? canAttachPart(slots, socket.index, part)
+    : !slots[socket.index])?.index ?? -1
+}
+
+export function socketParentIndex(index: number): number | null {
+  return index < 4 ? null : Math.floor((index - 4) / 3)
+}
+
+export function socketChildIndices(parentIndex: number): number[] {
+  const firstChild = 4 + parentIndex * 3
+  return [firstChild, firstChild + 1, firstChild + 2].filter((index) => index < MAX_SHIP_SLOTS)
+}
+
+export function socketDescendantIndices(parentIndex: number): number[] {
+  const descendants: number[] = []
+  const queue = [...socketChildIndices(parentIndex)]
+  while (queue.length > 0) {
+    const index = queue.shift()!
+    descendants.push(index)
+    queue.push(...socketChildIndices(index))
   }
-  return layout.sort((a, b) => a.index - b.index)
+  return descendants
+}
+
+/** Each BODY opens three nearby sockets; BODY children can branch again. */
+export function shipSocketLayout(slots: Array<ShipPart | null>): ShipSocket[] {
+  const nodes = BASE_SOCKETS.map((socket) => ({
+    ...socket,
+    angle: Math.atan2(socket.y, socket.x),
+    depth: 0,
+  }))
+  const layout: ShipSocket[] = BASE_SOCKETS.map((socket) => ({ ...socket }))
+  const queue = [...nodes]
+  while (queue.length > 0) {
+    const parent = queue.shift()!
+    if (slots[parent.index]?.kind !== 'body' || !isSocketUnlocked(slots, parent.index)) continue
+    const children = socketChildIndices(parent.index)
+    for (const ordinal of [1, 0, 2]) {
+      const childIndex = children[ordinal]
+      if (childIndex === undefined) continue
+      const angle = parent.angle + [-0.72, 0, 0.72][ordinal] * (1 + parent.depth * 0.18)
+      let x = parent.x + Math.cos(angle) * 48
+      let y = parent.y + Math.sin(angle) * 48
+      for (let attempt = 0; attempt < 50 && layout.some((socket) => Math.hypot(socket.x - x, socket.y - y) < 30); attempt += 1) {
+        const outwardAngle = Math.atan2(y, x)
+        x += Math.cos(outwardAngle) * 8
+        y += Math.sin(outwardAngle) * 8
+      }
+      const child = {
+        index: childIndex,
+        x,
+        y,
+        parentIndex: parent.index,
+        angle,
+        depth: parent.depth + 1,
+      }
+      queue.push(child)
+      layout.push({
+        index: child.index,
+        x: child.x,
+        y: child.y,
+        parentIndex: child.parentIndex,
+      })
+    }
+  }
+  return layout
 }
 
 export function movementScale(mass: number, limit = 15): number {
@@ -155,8 +214,9 @@ function validSafeRun(value: unknown): SafeRun | null {
   const integrity = slots.map((part, index) => part
     ? Math.min(partDurability(part), validIntegrity(savedIntegrity[index], partDurability(part)))
     : 0)
-  migrateLegacyOuterSlots(slots, integrity, run.slots.length)
+  if (run.socketLayoutVersion !== SOCKET_LAYOUT_VERSION) migrateLegacySocketLayout(slots, integrity)
   return {
+    socketLayoutVersion: SOCKET_LAYOUT_VERSION,
     xRatio: validRatio(run.xRatio, 0.3),
     yRatio: validRatio(run.yRatio, 0.52),
     explored: Math.min(100, validCount(run.explored)),
@@ -165,25 +225,40 @@ function validSafeRun(value: unknown): SafeRun | null {
   }
 }
 
-function migrateLegacyOuterSlots(
+function migrateLegacySocketLayout(
   slots: Array<ShipPart | null>,
   integrity: number[],
-  savedLength: number,
 ): void {
-  if (savedLength > 6) return
-  for (const legacyIndex of [4, 5]) {
-    const part = slots[legacyIndex]
-    if (!part || isSocketUnlocked(slots, legacyIndex)) continue
-    const layout = shipSocketLayout(slots)
-    const target = layout.find((socket) => socket.index >= 4 && !slots[socket.index])?.index
-      ?? layout.find((socket) => !slots[socket.index])?.index
-      ?? -1
+  const legacySlots = [...slots]
+  const legacyIntegrity = [...integrity]
+  const migrated: Array<ShipPart | null> = legacySlots.slice(0, 4)
+  const migratedIntegrity = legacyIntegrity.slice(0, 4)
+  const indexMap = new Map<number, number>([0, 1, 2, 3].map((index) => [index, index]))
+
+  for (let legacyIndex = 4; legacyIndex < legacySlots.length; legacyIndex += 1) {
+    const part = legacySlots[legacyIndex]
+    if (!part) continue
+    const legacyParent = legacyIndex - 4
+    const migratedParent = indexMap.get(legacyParent)
+    let target = migratedParent !== undefined && legacySlots[legacyParent]?.kind === 'body'
+      ? socketChildIndices(migratedParent)[1] ?? -1
+      : -1
+    if (target < 0 || migrated[target]) {
+      const layout = shipSocketLayout(migrated)
+      target = layout.find((socket) => socket.index >= 4 && !migrated[socket.index])?.index
+        ?? layout.find((socket) => !migrated[socket.index])?.index
+        ?? -1
+    }
     if (target < 0) continue
-    slots[target] = part
-    integrity[target] = integrity[legacyIndex]
-    slots[legacyIndex] = null
-    integrity[legacyIndex] = 0
+    migrated[target] = part
+    migratedIntegrity[target] = legacyIntegrity[legacyIndex]
+    indexMap.set(legacyIndex, target)
   }
+
+  const normalizedSlots = Array.from({ length: migrated.length }, (_, index) => migrated[index] ?? null)
+  const normalizedIntegrity = normalizedSlots.map((part, index) => part ? migratedIntegrity[index] ?? partDurability(part) : 0)
+  slots.splice(0, slots.length, ...normalizedSlots)
+  integrity.splice(0, integrity.length, ...normalizedIntegrity)
 }
 
 function validIntegrity(value: unknown, fallback: number): number {

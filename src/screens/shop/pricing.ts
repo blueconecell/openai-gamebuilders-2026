@@ -33,7 +33,7 @@ export const DEFAULT_SHOP_ITEMS: ShopItem[] = [
   {
     id: 'frame',
     name: '확장 프레임',
-    detail: '장착 방향 바깥에 연결 소켓을 열고 질량 한도를 6 늘립니다.',
+    detail: '주변에 연결 소켓 3개를 열고 질량 한도를 6 늘립니다.',
     cost: 5,
     part: { kind: 'body', mass: 4 },
   },
@@ -57,7 +57,7 @@ export function previewPurchase(
   const socketsBefore = unlockedSockets(slots)
 
   // The shop can only estimate: the pilot picks the real socket in the hangar.
-  const openSocket = firstOpenSocket(slots)
+  const openSocket = firstOpenSocket(slots, item.part)
   const hasRoom = openSocket >= 0
 
   const projected = [...slots]

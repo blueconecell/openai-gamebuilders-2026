@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_SAVE,
+  MAX_SHIP_SLOTS,
   SAVE_KEY,
   calculateMass,
   calculateMassLimit,
   calculatePower,
+  canAttachPart,
   movementScale,
   partDurability,
   partResaleValue,
   readSave,
   shipSocketLayout,
+  socketChildIndices,
+  socketDescendantIndices,
+  type ShipPart,
   writeSave,
   type OperatorPart,
 } from './logic'
@@ -52,19 +57,36 @@ describe('operator rail', () => {
     expect(movementScale(23, calculateMassLimit([body]))).toBeCloseTo(0.85)
   })
 
-  it('grows new sockets outward from chained body modules', () => {
+  it('opens three nearby sockets for every chained body module', () => {
     const body = { kind: 'body' as const, mass: 4 }
     const first = shipSocketLayout([null, null, null, body])
-    expect(first).toHaveLength(5)
-    expect(first[4].index).toBe(7)
-    expect(first[4].parentIndex).toBe(3)
-    expect(first[4].y).toBeGreaterThan(first[3].y)
+    expect(first).toHaveLength(7)
+    expect(first.slice(4).map((socket) => socket.index)).toEqual([14, 13, 15])
+    expect(first.slice(4).every((socket) => socket.parentIndex === 3)).toBe(true)
 
-    const chained = shipSocketLayout([null, null, null, body, null, null, null, body])
-    expect(chained).toHaveLength(6)
-    expect(chained[5].index).toBe(11)
-    expect(chained[5].parentIndex).toBe(7)
-    expect(chained[5].y).toBeGreaterThan(chained[4].y)
+    const slots = Array.from({ length: 15 }, () => null) as Array<typeof body | null>
+    slots[3] = body
+    slots[14] = body
+    const chained = shipSocketLayout(slots)
+    expect(chained).toHaveLength(10)
+    expect(chained.filter((socket) => socket.parentIndex === 14).map((socket) => socket.index)).toEqual([47, 46, 48])
+    expect(socketChildIndices(14)).toEqual([46, 47, 48])
+    expect(socketDescendantIndices(14)).toContain(47)
+  })
+
+  it('keeps deep branch sockets separate and rejects BODY on a leaf socket', () => {
+    const body = { kind: 'body' as const, mass: 2 }
+    const fullTree: Array<ShipPart | null> = Array.from({ length: MAX_SHIP_SLOTS }, () => body)
+    const layout = shipSocketLayout(fullTree)
+    for (let left = 0; left < layout.length; left += 1) {
+      for (let right = left + 1; right < layout.length; right += 1) {
+        expect(Math.hypot(layout[left].x - layout[right].x, layout[left].y - layout[right].y)).toBeGreaterThanOrEqual(29.9)
+      }
+    }
+    const leaf = layout.find((socket) => socketChildIndices(socket.index).length === 0)!
+    const emptyLeafSlots = [...fullTree]
+    emptyLeafSlots[leaf.index] = null
+    expect(canAttachPart(emptyLeafSlots, leaf.index, body)).toBe(false)
   })
 
   it('assigns deliberately fragile durability by part category', () => {
@@ -117,6 +139,7 @@ describe('local save', () => {
     })
 
     expect(restored.safeRun).toEqual({
+      socketLayoutVersion: 2,
       xRatio: 0.4,
       yRatio: 0.6,
       explored: 75,
@@ -151,7 +174,7 @@ describe('local save', () => {
       }),
     })
     expect(restored.safeRun?.slots[4]).toBeNull()
-    expect(restored.safeRun?.slots[7]).toEqual({ kind: 'defense', defense: 'shield', mass: 4 })
+    expect(restored.safeRun?.slots[14]).toEqual({ kind: 'defense', defense: 'shield', mass: 4 })
   })
 
   it('restores weapon, body, and defense attachments', () => {
@@ -173,5 +196,35 @@ describe('local save', () => {
       { kind: 'defense', defense: 'repair', mass: 4 },
     ])
     expect(restored.safeRun?.slotIntegrity).toEqual([4, 18, 16])
+  })
+
+  it('migrates a deployed one-child BODY chain onto center branches', () => {
+    const restored = readSave({
+      getItem: () => JSON.stringify({
+        safeRun: {
+          slots: [null, null, null, { kind: 'body', mass: 2 }, null, null, null, { kind: 'body', mass: 2 }, null, null, null, { kind: 'weapon', weapon: 'mine', mass: 3 }],
+        },
+      }),
+    })
+    expect(restored.safeRun?.slots[3]).toEqual({ kind: 'body', mass: 2 })
+    expect(restored.safeRun?.slots[14]).toEqual({ kind: 'body', mass: 2 })
+    expect(restored.safeRun?.slots[47]).toEqual({ kind: 'weapon', weapon: 'mine', mass: 3 })
+  })
+
+  it('preserves versioned three-branch socket indices when reloading', () => {
+    const slots: Array<ShipPart | null> = Array.from({ length: 15 }, () => null)
+    slots[3] = { kind: 'body', mass: 2 }
+    slots[14] = { kind: 'weapon', weapon: 'mine', mass: 3 }
+    const restored = readSave({
+      getItem: () => JSON.stringify({
+        safeRun: {
+          socketLayoutVersion: 2,
+          slots,
+          slotIntegrity: Array.from({ length: 15 }, (_, index) => index === 3 ? 18 : index === 14 ? 14 : 0),
+        },
+      }),
+    })
+    expect(restored.safeRun?.slots[14]).toEqual({ kind: 'weapon', weapon: 'mine', mass: 3 })
+    expect(restored.safeRun?.slotIntegrity[14]).toBe(14)
   })
 })

@@ -2,6 +2,7 @@ import {
   calculateMass,
   calculateMassLimit,
   calculatePower,
+  canAttachPart,
   firstOpenSocket,
   isSocketUnlocked,
   movementScale,
@@ -9,6 +10,8 @@ import {
   partResaleValue,
   readSave,
   shipSocketLayout,
+  socketDescendantIndices,
+  SOCKET_LAYOUT_VERSION,
   writeSave,
   type DefenseKind,
   type OperatorPart,
@@ -202,6 +205,7 @@ export function createGame(
 
   const persistSafeRun = () => {
     save.safeRun = {
+      socketLayoutVersion: SOCKET_LAYOUT_VERSION,
       xRatio: player.x / WORLD.w,
       yRatio: player.y / WORLD.h,
       explored,
@@ -235,7 +239,7 @@ export function createGame(
     slots[index] = null
     message = `${destroyed} 부품 파괴 · 연결 효과 상실`
     if (destroyedWasBody) {
-      for (let orphan = index + 4; orphan < slots.length; orphan += 4) {
+      for (const orphan of socketDescendantIndices(index)) {
         if (!slots[orphan]) continue
         slots[orphan] = null
         slotIntegrity[orphan] = 0
@@ -439,7 +443,7 @@ export function createGame(
   }
 
   const selectSocket = (index: number) => {
-    if (!pendingPart || !pendingSelected || slots[index] || !isSocketUnlocked(slots, index)) return
+    if (!pendingPart || !pendingSelected || !canAttachPart(slots, index, pendingPart)) return
     slots[index] = pendingPart
     slotIntegrity[index] = partDurability(pendingPart)
     pendingPart = null
@@ -505,9 +509,7 @@ export function createGame(
       return
     }
     const hasAttachedDescendant = part.kind === 'body'
-      && slots.some((candidate, candidateIndex) => candidateIndex > index
-        && (candidateIndex - index) % 4 === 0
-        && Boolean(candidate))
+      && socketDescendantIndices(index).some((candidateIndex) => Boolean(slots[candidateIndex]))
     if (hasAttachedDescendant) {
       selectedMountedSlot = null
       message = '몸체 제거 불가 · 연결된 외곽 장비를 먼저 판매하세요'
@@ -575,6 +577,10 @@ export function createGame(
   }
 
   const buyPart = (part: ShipPart, cost: number) => {
+    if (firstOpenSocket(slots, part) < 0) {
+      message = part.kind === 'body' ? 'BODY를 확장할 수 있는 소켓이 없습니다' : '장착 가능한 빈 소켓이 없습니다'
+      return
+    }
     if (save.scrap < cost) {
       message = '스크랩이 부족합니다'
       return
@@ -1917,15 +1923,28 @@ export function createGame(
     const socketLayout = shipSocketLayout(slots)
     const layoutExtent = Math.max(46, ...socketLayout.map((socket) => Math.hypot(socket.x, socket.y)))
     const scale = Math.min(compact ? 1.05 : 1.35, (compact ? 112 : 142) / layoutExtent)
+    let minimumScreenGap = Number.POSITIVE_INFINITY
+    for (let left = 0; left < socketLayout.length; left += 1) {
+      for (let right = left + 1; right < socketLayout.length; right += 1) {
+        minimumScreenGap = Math.min(minimumScreenGap, Math.hypot(
+          socketLayout[left].x - socketLayout[right].x,
+          socketLayout[left].y - socketLayout[right].y,
+        ) * scale)
+      }
+    }
+    const nodeHalf = Math.max(2, Math.min(17, minimumScreenGap * 0.32))
+    const hitHalf = Math.max(nodeHalf + 0.5, Math.min(24, minimumScreenGap * 0.42))
+    const coreHalf = Math.max(3, Math.min(22, 16 * scale))
+    const socketFontSize = Math.max(4, Math.min(10, nodeHalf * 0.6))
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.strokeStyle = CYAN
     ctx.fillStyle = '#0a1a21'
-    ctx.fillRect(cx - 22, cy - 22, 44, 44)
-    ctx.strokeRect(cx - 22, cy - 22, 44, 44)
+    ctx.fillRect(cx - coreHalf, cy - coreHalf, coreHalf * 2, coreHalf * 2)
+    ctx.strokeRect(cx - coreHalf, cy - coreHalf, coreHalf * 2, coreHalf * 2)
     ctx.fillStyle = CYAN
-    ctx.font = '700 11px ui-monospace, monospace'
-    ctx.fillText('CORE 2', cx, cy)
+    ctx.font = `700 ${Math.max(4, Math.min(11, coreHalf * 0.5))}px ui-monospace, monospace`
+    ctx.fillText(coreHalf >= 12 ? 'CORE 2' : 'C', cx, cy)
 
     socketLayout.forEach((socket) => {
       const index = socket.index
@@ -1933,7 +1952,7 @@ export function createGame(
       const sx = cx + socket.x * scale
       const sy = cy + socket.y * scale
       const available = isSocketUnlocked(slots, index)
-      const canAttach = available && !part && pendingSelected
+      const canAttach = pendingSelected && canAttachPart(slots, index, previewPart)
       const parent = socket.parentIndex === null
         ? { x: cx, y: cy }
         : socketLayout.find((candidate) => candidate.index === socket.parentIndex)
@@ -1955,26 +1974,34 @@ export function createGame(
       }
       ctx.stroke()
       ctx.fillStyle = part ? '#0b2027' : '#071016'
-      ctx.fillRect(sx - 17, sy - 17, 34, 34)
-      ctx.strokeRect(sx - 17, sy - 17, 34, 34)
+      ctx.fillRect(sx - nodeHalf, sy - nodeHalf, nodeHalf * 2, nodeHalf * 2)
+      ctx.strokeRect(sx - nodeHalf, sy - nodeHalf, nodeHalf * 2, nodeHalf * 2)
       ctx.setLineDash([])
       ctx.fillStyle = dismantleSelected ? RED : part ? partColor(part) : available ? '#58717b' : '#303b40'
-      ctx.font = '700 10px ui-monospace, monospace'
-      ctx.fillText(dismantleSelected ? '분해?' : part ? partLabel(part) : available ? '+' : 'LOCK', sx, sy)
+      ctx.font = `700 ${socketFontSize}px ui-monospace, monospace`
+      ctx.fillText(dismantleSelected ? '분해?' : part ? nodeHalf >= 10 ? partLabel(part) : '■' : available ? '+' : 'LOCK', sx, sy)
       if (canAttach) {
-        buttons.push({ x: sx - 24, y: sy - 24, w: 48, h: 48, action: () => selectSocket(index) })
+        buttons.push({
+          x: sx - hitHalf,
+          y: sy - hitHalf,
+          w: hitHalf * 2,
+          h: hitHalf * 2,
+          action: () => selectSocket(index),
+          hitTest: (point) => Math.hypot(point.x - sx, point.y - sy) <= hitHalf,
+        })
       } else if (part) {
         buttons.push({
-          x: sx - 24,
-          y: sy - 24,
-          w: 48,
-          h: 48,
+          x: sx - hitHalf,
+          y: sy - hitHalf,
+          w: hitHalf * 2,
+          h: hitHalf * 2,
           action: () => sellMountedPart(index),
           hoverText: '두 번 눌러 기존 부품 분해',
+          hitTest: (point) => Math.hypot(point.x - sx, point.y - sy) <= hitHalf,
         })
       }
     })
-    const firstEmpty = firstOpenSocket(slots)
+    const firstEmpty = firstOpenSocket(slots, previewPart)
     const previewSlots = [...slots]
     if (firstEmpty >= 0) previewSlots[firstEmpty] = previewPart
     const preview = calculatePower(2, previewSlots)
@@ -2316,7 +2343,7 @@ function defenseLabel(kind: DefenseKind): string {
 function partDescription(part: ShipPart): string {
   if (part.kind === 'add') return `누적 FIRE에 ${part.value} 추가`
   if (part.kind === 'multiply') return `앞에서 계산된 누적 FIRE를 ${part.value}배`
-  if (part.kind === 'body') return '바깥 연결 소켓 +1 · 연속 확장 · 질량 한도 +6'
+  if (part.kind === 'body') return '주변 연결 소켓 +3 · 분기 확장 · 질량 한도 +6'
   if (part.kind === 'weapon') {
     if (part.weapon === 'homing') return '느린 주기 · 강한 유도 공격'
     if (part.weapon === 'mine') return '후방 설치 · 적이 살짝 회피'

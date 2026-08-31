@@ -14,7 +14,7 @@ export type PartPreview = {
 export function previewPart(slots: Array<ShipPart | null>, part: ShipPart, _unlockedSockets: number): PartPreview {
   const fireBefore = calculatePower(2, slots)
   const massBefore = calculateMass(slots)
-  const target = firstOpenSocket(slots)
+  const target = firstOpenSocket(slots, part)
   const previewSlots = [...slots]
   if (target >= 0) previewSlots[target] = part
   const massAfter = massBefore + part.mass

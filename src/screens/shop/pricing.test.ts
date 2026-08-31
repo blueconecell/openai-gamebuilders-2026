@@ -27,9 +27,9 @@ describe('previewPurchase', () => {
     expect(preview.sockets).toEqual({ before: 4, after: 4 })
   })
 
-  it('opens one more socket when a body part is installed', () => {
+  it('opens three more sockets when a body part is installed', () => {
     const preview = previewPurchase(frame, slots(), 10)
-    expect(preview.sockets).toEqual({ before: 4, after: 5 })
+    expect(preview.sockets).toEqual({ before: 4, after: 7 })
     expect(preview.massLimit).toEqual({ before: 15, after: 21 })
   })
 

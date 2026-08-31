@@ -1,6 +1,6 @@
 import './style.css'
 import { createGame, type GameResult } from './game/game'
-import { firstOpenSocket, partDurability, readSave, writeSave, type ShipPart } from './game/logic'
+import { SOCKET_LAYOUT_VERSION, firstOpenSocket, partDurability, readSave, writeSave, type ShipPart } from './game/logic'
 import { createScreenFlow, type FlowData } from './screens/flow'
 import { DEFAULT_SHOP_ITEMS, type ShopItem } from './screens/shop/pricing'
 
@@ -76,6 +76,7 @@ const showResult = (result: GameResult) => {
 const startGame = (continueRun: boolean) => {
   if (!continueRun) {
     save.safeRun = {
+      socketLayoutVersion: SOCKET_LAYOUT_VERSION,
       xRatio: 0.5,
       yRatio: 0.5,
       explored: 0,
@@ -92,13 +93,14 @@ const startGame = (continueRun: boolean) => {
 }
 
 const purchase = (item: ShopItem) => {
-  const openSocket = firstOpenSocket(slots)
+  const openSocket = firstOpenSocket(slots, item.part)
   if (openSocket < 0 || save.scrap < item.cost) return
 
   const savedIntegrity = save.safeRun?.slotIntegrity ?? []
   slots[openSocket] = item.part
   save.scrap -= item.cost
   save.safeRun = {
+    socketLayoutVersion: SOCKET_LAYOUT_VERSION,
     xRatio: save.safeRun?.xRatio ?? 0.5,
     yRatio: save.safeRun?.yRatio ?? 0.5,
     explored: save.safeRun?.explored ?? 0,
