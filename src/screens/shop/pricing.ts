@@ -1,47 +1,47 @@
-import { calculateMass, calculatePower, type OperatorPart } from '../../game/logic'
-import type { ShipSlots } from '../screen'
+import { calculateMass, calculatePower, type ShipPart } from '../../game/logic'
+import { unlockedSockets, type ShipSlots } from '../screen'
 
 export type ShopItem = {
   id: string
   name: string
   detail: string
   cost: number
-  /** Present when the goods occupy an operator socket. */
-  part?: OperatorPart
-  /** Hull integrity restored on delivery — the currency that buys back a respawn. */
-  integrity?: number
+  part: ShipPart
 }
 
 export type PurchasePreview = {
   affordable: boolean
-  /** False when every operator socket is already filled. */
+  /** False when every unlocked socket is already filled. */
   hasRoom: boolean
   scrapAfter: number
+  /** Only operator parts move firepower; weapons and armour leave it flat. */
   power: { before: number; after: number; delta: number }
   mass: { before: number; after: number; delta: number }
+  /** Body parts open an extra socket, so the count can grow on purchase. */
+  sockets: { before: number; after: number }
 }
 
 export const DEFAULT_SHOP_ITEMS: ShopItem[] = [
   {
     id: 'amplifier',
     name: '증폭기 ×2',
-    detail: '코어 출력을 두 배로 증폭합니다. 무게가 큽니다.',
+    detail: '앞선 연산 화력을 두 배로 증폭합니다. 무게가 큽니다.',
     cost: 6,
     part: { kind: 'multiply', value: 2, mass: 5 },
   },
   {
-    id: 'booster',
-    name: '가산기 +3',
-    detail: '안정적으로 화력을 더합니다. 가벼운 편입니다.',
-    cost: 4,
-    part: { kind: 'add', value: 3, mass: 3 },
+    id: 'frame',
+    name: '확장 프레임',
+    detail: '선체를 넓혀 부품 소켓 1개를 추가로 개방합니다.',
+    cost: 5,
+    part: { kind: 'body', mass: 4 },
   },
   {
-    id: 'repair-kit',
-    name: '수리 키트',
-    detail: '손상된 선체를 복구해 무결성을 1 회복합니다. 소켓을 쓰지 않습니다.',
-    cost: 3,
-    integrity: 1,
+    id: 'homing',
+    name: '유도탄 발사기',
+    detail: '느린 주기로 강하게 유도되는 무기를 장착합니다.',
+    cost: 4,
+    part: { kind: 'weapon', weapon: 'homing', mass: 3 },
   },
 ]
 
@@ -52,11 +52,14 @@ export function previewPurchase(
 ): PurchasePreview {
   const powerBefore = calculatePower(2, slots)
   const massBefore = calculateMass(slots)
-  const openSocket = slots.findIndex((slot) => !slot)
-  const hasRoom = !item.part || openSocket >= 0
+  const socketsBefore = unlockedSockets(slots)
 
-  const projected = item.part && openSocket >= 0
-    ? slots.map((slot, index) => (index === openSocket ? item.part! : slot))
+  // The shop can only estimate: the pilot picks the real socket in the hangar.
+  const openSocket = slots.findIndex((slot, index) => !slot && index < socketsBefore)
+  const hasRoom = openSocket >= 0
+
+  const projected = hasRoom
+    ? slots.map((slot, index) => (index === openSocket ? item.part : slot))
     : slots
 
   const powerAfter = calculatePower(2, projected)
@@ -68,6 +71,7 @@ export function previewPurchase(
     scrapAfter: Math.max(0, scrap - item.cost),
     power: { before: powerBefore, after: powerAfter, delta: powerAfter - powerBefore },
     mass: { before: massBefore, after: massAfter, delta: massAfter - massBefore },
+    sockets: { before: socketsBefore, after: unlockedSockets(projected) },
   }
 }
 

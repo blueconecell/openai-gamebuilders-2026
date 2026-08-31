@@ -21,7 +21,20 @@ const CSS = `
   --gb-ghost: var(--ghost, #93a7b3);
   --gb-line: var(--line, #263b48);
   --gb-panel: var(--panel, #0c141c);
+
+  /*
+   * Korean set in monospace is what makes an interface look machine-written.
+   * Prose runs in the platform UI face; the mono face is kept for readouts,
+   * where fixed-width digits actually earn their place.
+   */
+  --gb-sans: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont,
+    'Apple SD Gothic Neo', 'Segoe UI', 'Noto Sans KR', 'Malgun Gothic', system-ui, sans-serif;
+  --gb-display: 'Avenir Next Condensed', 'HelveticaNeue-CondensedBold', 'Arial Narrow',
+    'Apple SD Gothic Neo', 'Segoe UI', system-ui, sans-serif;
+  --gb-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
   position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
   gap: clamp(12px, 2.4vh, 22px);
@@ -32,14 +45,65 @@ const CSS = `
   overflow-x: hidden;
   overflow-y: auto;
   color: #e9ffff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--gb-sans);
+  letter-spacing: 0;
+  background: #04070c;
+}
+
+/* Deep-space wash: slow colour drift, far enough back to stay readable. */
+.gb-screen::before {
+  content: '';
+  position: absolute;
+  z-index: -2;
+  inset: -25%;
+  pointer-events: none;
   background:
-    radial-gradient(120% 90% at 50% 0%, rgba(105, 230, 232, 0.07), transparent 62%),
-    #05070a;
+    radial-gradient(38% 30% at 22% 18%, rgba(56, 128, 190, 0.30), transparent 70%),
+    radial-gradient(34% 28% at 82% 26%, rgba(150, 74, 190, 0.24), transparent 72%),
+    radial-gradient(46% 36% at 62% 88%, rgba(24, 154, 158, 0.26), transparent 74%),
+    radial-gradient(30% 24% at 12% 76%, rgba(196, 108, 70, 0.16), transparent 70%);
+  filter: blur(14px);
+  animation: gb-drift 42s ease-in-out infinite alternate;
+}
+
+/* Two star layers at different scales, sliding to suggest depth. */
+.gb-screen::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.55;
+  background-image:
+    radial-gradient(1px 1px at 12% 22%, #cbeaff 99%, transparent),
+    radial-gradient(1px 1px at 74% 12%, #a7d8ff 99%, transparent),
+    radial-gradient(1px 1px at 44% 62%, #ffffff 99%, transparent),
+    radial-gradient(1px 1px at 88% 74%, #bfe6ff 99%, transparent),
+    radial-gradient(1px 1px at 28% 86%, #9fd0ff 99%, transparent),
+    radial-gradient(2px 2px at 62% 38%, rgba(255, 232, 190, 0.9) 99%, transparent);
+  background-size: 240px 240px, 240px 240px, 380px 380px, 380px 380px, 520px 520px, 520px 520px;
+  animation: gb-parallax 90s linear infinite;
+}
+
+@keyframes gb-drift {
+  0%   { transform: translate3d(-2%, -1%, 0) scale(1.02); }
+  50%  { transform: translate3d(2%, 2%, 0) scale(1.08); }
+  100% { transform: translate3d(-1%, 3%, 0) scale(1.03); }
+}
+
+@keyframes gb-parallax {
+  to {
+    background-position:
+      240px -240px, -240px 240px,
+      380px -380px, -380px 380px,
+      520px -520px, -520px 520px;
+  }
 }
 
 /* Keep the column readable on desktop instead of stretching panels edge to edge. */
 .gb-screen > * {
+  position: relative;
+  z-index: 1;
   width: 100%;
   max-width: 760px;
   margin-left: auto;
@@ -49,31 +113,36 @@ const CSS = `
 .gb-eyebrow {
   margin: 0;
   color: var(--gb-ghost);
+  font-family: var(--gb-mono);
   font-size: 10px;
   letter-spacing: 0.2em;
 }
 
 .gb-title {
   margin: 0;
-  font-family: Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif;
-  font-size: clamp(26px, 6vw, 52px);
-  letter-spacing: 0.03em;
-  line-height: 1;
+  font-family: var(--gb-display);
+  font-size: clamp(28px, 6.4vw, 56px);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 0.98;
+  text-transform: uppercase;
 }
 
 .gb-title span { color: var(--gb-amber); }
 
 .gb-heading {
   margin: 0;
-  font-size: clamp(15px, 2.6vw, 19px);
-  letter-spacing: 0.06em;
+  font-family: var(--gb-display);
+  font-size: clamp(19px, 3.4vw, 26px);
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
 .gb-note {
   margin: 0;
   color: var(--gb-ghost);
-  font-size: clamp(11px, 1.9vw, 12px);
-  line-height: 1.6;
+  font-size: clamp(12px, 2vw, 13px);
+  line-height: 1.65;
 }
 
 .gb-panel {
@@ -81,9 +150,57 @@ const CSS = `
   gap: 10px;
   align-content: start;
   border: 1px solid var(--gb-line);
-  background: rgba(12, 20, 28, 0.82);
+  background: rgba(9, 16, 24, 0.72);
+  backdrop-filter: blur(3px);
   padding: clamp(12px, 2.2vw, 18px);
 }
+
+/* Per-screen explainer. Collapsed by default so it never crowds the controls. */
+.gb-help {
+  border: 1px solid var(--gb-line);
+  background: rgba(9, 16, 24, 0.6);
+  backdrop-filter: blur(3px);
+}
+
+.gb-help > summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 14px;
+  color: var(--gb-cyan);
+  font-family: var(--gb-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  list-style: none;
+}
+
+.gb-help > summary::-webkit-details-marker { display: none; }
+
+.gb-help > summary::before {
+  content: '?';
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--gb-cyan);
+  border-radius: 50%;
+  font-size: 10px;
+}
+
+.gb-help[open] > summary { border-bottom: 1px solid var(--gb-line); }
+
+.gb-help ul {
+  margin: 0;
+  padding: 12px 16px 14px 30px;
+  display: grid;
+  gap: 7px;
+  color: var(--gb-ghost);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.gb-help li::marker { color: var(--gb-cyan); }
 
 .gb-stats {
   display: grid;
@@ -98,17 +215,19 @@ const CSS = `
   flex-direction: column;
   gap: 5px;
   padding: 10px 12px;
-  background: var(--gb-panel);
+  background: rgba(9, 16, 24, 0.92);
 }
 
 .gb-stat dt {
   color: var(--gb-ghost);
+  font-family: var(--gb-mono);
   font-size: 9px;
   letter-spacing: 0.16em;
 }
 
 .gb-stat dd {
   margin: 0;
+  font-family: var(--gb-mono);
   font-size: clamp(17px, 3.4vw, 23px);
   line-height: 1;
 }
@@ -126,11 +245,11 @@ const CSS = `
   margin-top: auto;
 }
 
+.gb-actions.is-split { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+
 @media (min-width: 641px) {
   .gb-actions { margin-top: 0; }
 }
-
-.gb-actions.is-split { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 
 .gb-button {
   display: flex;
@@ -142,10 +261,11 @@ const CSS = `
   padding: 12px 16px;
   border: 1px solid var(--gb-line);
   color: #e9ffff;
-  background: var(--gb-panel);
+  background: rgba(12, 20, 28, 0.86);
   font: inherit;
-  font-size: clamp(12px, 2.2vw, 14px);
-  letter-spacing: 0.08em;
+  font-size: clamp(13px, 2.2vw, 15px);
+  font-weight: 600;
+  letter-spacing: 0.01em;
   text-align: left;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s, color 0.15s;
@@ -154,6 +274,7 @@ const CSS = `
 .gb-button i {
   font-style: normal;
   color: var(--gb-ghost);
+  font-family: var(--gb-mono);
   font-size: 10px;
   letter-spacing: 0.14em;
 }
@@ -174,7 +295,7 @@ const CSS = `
 .gb-button:disabled {
   color: #4d5f6b;
   border-color: #1b2a34;
-  background: #080e14;
+  background: rgba(8, 14, 20, 0.86);
   cursor: not-allowed;
 }
 
@@ -185,33 +306,20 @@ const CSS = `
   flex-wrap: wrap;
 }
 
-.gb-ship svg { flex: 0 0 auto; width: clamp(140px, 34vw, 190px); height: auto; }
-.gb-ship-readout { display: grid; gap: 7px; min-width: 130px; }
+.gb-ship svg { flex: 0 0 auto; width: clamp(150px, 36vw, 200px); height: auto; }
+.gb-ship-readout { display: grid; gap: 7px; min-width: 150px; flex: 1 1 180px; }
 
 .gb-readout-row {
   display: flex;
   justify-content: space-between;
   gap: 14px;
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
 }
 
 .gb-readout-row span { color: var(--gb-ghost); }
-.gb-readout-row b { font-weight: 700; }
+.gb-readout-row b { font-family: var(--gb-mono); font-weight: 700; }
 .gb-readout-row b.is-amber { color: var(--gb-amber); }
 .gb-readout-row b.is-danger { color: var(--gb-danger); }
-.gb-readout-row b.is-keep { color: var(--gb-cyan); }
-
-.gb-pips { display: inline-flex; gap: 4px; }
-
-.gb-pips i {
-  width: 9px;
-  height: 9px;
-  border: 1px solid var(--gb-cyan);
-  background: var(--gb-cyan);
-}
-
-.gb-pips i.is-spent { background: transparent; border-color: #3a4d59; }
 
 .gb-goods { display: grid; gap: 10px; }
 
@@ -219,22 +327,39 @@ const CSS = `
   display: grid;
   gap: 10px;
   border: 1px solid var(--gb-line);
-  background: rgba(12, 20, 28, 0.82);
+  background: rgba(9, 16, 24, 0.72);
+  backdrop-filter: blur(3px);
   padding: clamp(12px, 2.2vw, 16px);
 }
 
 .gb-good.is-locked { opacity: 0.55; }
 .gb-good header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.gb-good h3 { margin: 0; font-size: clamp(13px, 2.4vw, 15px); letter-spacing: 0.05em; }
+
+.gb-good h3 {
+  margin: 0;
+  font-family: var(--gb-display);
+  font-size: clamp(16px, 2.8vw, 19px);
+  font-weight: 700;
+}
 
 .gb-cost {
   flex: 0 0 auto;
   color: var(--gb-amber);
+  font-family: var(--gb-mono);
   font-size: clamp(13px, 2.4vw, 15px);
   font-weight: 700;
 }
 
 .gb-cost.is-short { color: var(--gb-danger); }
+
+.gb-tag {
+  justify-self: start;
+  border: 1px solid currentColor;
+  padding: 3px 8px;
+  font-family: var(--gb-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
 
 .gb-delta {
   display: flex;
@@ -242,12 +367,11 @@ const CSS = `
   gap: 8px 16px;
   border-top: 1px dashed var(--gb-line);
   padding-top: 10px;
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: 12px;
 }
 
 .gb-delta span { color: var(--gb-ghost); }
-.gb-delta b { color: var(--gb-cyan); font-weight: 700; }
+.gb-delta b { color: var(--gb-cyan); font-family: var(--gb-mono); font-weight: 700; }
 .gb-delta b.is-amber { color: var(--gb-amber); }
 .gb-delta b.is-danger { color: var(--gb-danger); }
 
@@ -260,14 +384,16 @@ const CSS = `
 
 .gb-verdict h2 {
   margin: 0;
-  font-family: Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif;
-  font-size: clamp(30px, 8vw, 62px);
-  letter-spacing: 0.04em;
-  line-height: 1;
+  font-family: var(--gb-display);
+  font-size: clamp(34px, 8.6vw, 68px);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 0.96;
+  text-transform: uppercase;
 }
 
-.gb-verdict.is-win h2 { color: var(--gb-amber); }
-.gb-verdict.is-loss h2 { color: var(--gb-danger); }
+.gb-verdict.is-win h2 { color: var(--gb-amber); text-shadow: 0 0 26px rgba(255, 184, 74, 0.45); }
+.gb-verdict.is-loss h2 { color: var(--gb-danger); text-shadow: 0 0 26px rgba(255, 92, 108, 0.4); }
 
 .gb-kills { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; }
 
@@ -275,8 +401,8 @@ const CSS = `
   display: flex;
   align-items: center;
   gap: 9px;
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-family: var(--gb-mono);
+  font-size: 12px;
 }
 
 .gb-kills li::before {
@@ -295,12 +421,12 @@ const CSS = `
   background: rgba(255, 184, 74, 0.09);
   padding: 11px 14px;
   color: var(--gb-amber);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
 }
 
 .gb-banner::before {
   content: '';
+  flex: 0 0 auto;
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -314,12 +440,16 @@ const CSS = `
 @media (max-width: 640px) {
   .gb-screen { gap: 12px; }
   .gb-ship { justify-content: center; }
-  .gb-ship-readout { flex: 1 1 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .gb-banner::before { animation: none; }
+  .gb-screen::before,
+  .gb-screen::after,
+  .gb-banner::before {
+    animation: none;
+  }
 }
+
 `
 
 export function ensureScreenStyles(doc: Document = document): void {

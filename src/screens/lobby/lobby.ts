@@ -1,4 +1,4 @@
-import { delegateClicks, element, type ScreenHandle, type ShipSlots } from '../screen'
+import { createHelp, delegateClicks, element, type ScreenHandle, type ShipSlots } from '../screen'
 import { ensureScreenStyles } from '../styles'
 import { createShipPreview, shipSummary } from './ship-preview'
 
@@ -7,15 +7,22 @@ export type LobbyProps = {
   scrap: number
   discoveries: number
   victories: number
-  /** Remaining hull integrity — the run's lives. Reaching zero ends the exploration. */
-  integrity: number
-  integrityMax: number
   /** A saved run exists; when absent 이어하기 is unavailable. */
   canContinue: boolean
+  /** Overrides the built-in explainer copy. */
+  help?: string[]
   onNewRun(): void
   onContinue(): void
   onOpenShop(): void
 }
+
+const LOBBY_HELP = [
+  '격납고에서 현재 우주선의 화력, 질량, 소켓 상태를 확인합니다.',
+  '화력은 +, × 증강 부품의 연결 순서로 결정됩니다.',
+  '질량이 커지면 이동과 회전이 느려집니다. 과적을 주의하세요.',
+  '몸체(BODY) 부품을 장착하면 소켓이 하나씩 더 열립니다.',
+  '이어하기는 공백 공간에서 클로킹으로 저장된 탐험이 있을 때만 활성화됩니다.',
+]
 
 export function createLobbyScreen(props: LobbyProps): ScreenHandle<LobbyProps> {
   ensureScreenStyles()
@@ -47,9 +54,9 @@ export function createLobbyScreen(props: LobbyProps): ScreenHandle<LobbyProps> {
     readout.append(
       readoutRow('화력', `${ship.power}`, ship.power >= 10 ? 'is-amber' : ''),
       readoutRow('질량', `${ship.mass}`, ship.overloaded ? 'is-danger' : ''),
-      readoutRow('소켓', `${ship.installed} / ${current.slots.length}`),
+      readoutRow('소켓', `${ship.installed} / ${ship.unlocked}`),
+      readoutRow('무장', `무기 ${ship.weapons} · 방어 ${ship.defenses}`),
       readoutRow('상태', ship.overloaded ? '과적' : '안정', ship.overloaded ? 'is-danger' : ''),
-      integrityRow(current.integrity, current.integrityMax),
     )
     hangar.appendChild(readout)
 
@@ -67,7 +74,7 @@ export function createLobbyScreen(props: LobbyProps): ScreenHandle<LobbyProps> {
       button('shop', '공백 상점', `SCRAP ${current.scrap}`),
     )
 
-    el.append(head, hangar, stats, actions)
+    el.append(head, hangar, stats, createHelp('이 화면은?', current.help ?? LOBBY_HELP), actions)
   }
 
   render()
@@ -83,21 +90,6 @@ export function createLobbyScreen(props: LobbyProps): ScreenHandle<LobbyProps> {
       el.remove()
     },
   }
-}
-
-/** Integrity reads as pips rather than a number so remaining lives are countable at a glance. */
-function integrityRow(integrity: number, max: number): HTMLElement {
-  const row = element('div', 'gb-readout-row')
-  const label = element('span')
-  label.textContent = '무결성'
-  const pips = element('b', 'gb-pips')
-  for (let index = 0; index < max; index += 1) {
-    const pip = element('i', index < integrity ? '' : 'is-spent')
-    pips.appendChild(pip)
-  }
-  pips.setAttribute('aria-label', `무결성 ${integrity} / ${max}`)
-  row.append(label, pips)
-  return row
 }
 
 function readoutRow(label: string, value: string, modifier = ''): HTMLElement {
