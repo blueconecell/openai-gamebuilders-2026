@@ -1302,6 +1302,12 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     contacts.forEach(({ zone, color }) => {
       const dx = zone.x - player.x
       const dy = zone.y - player.y
+      const screenX = width / 2 + dx * ZOOM
+      const screenY = height / 2 + dy * ZOOM
+      const screenRadius = zone.radius * ZOOM
+      const nearestX = clamp(screenX, 0, width)
+      const nearestY = clamp(screenY, 0, height)
+      if (Math.hypot(screenX - nearestX, screenY - nearestY) <= screenRadius) return
       const angle = Math.atan2(dy, dx)
       const distance = Math.round(Math.hypot(dx, dy))
       const edgeX = clamp(width / 2 + Math.cos(angle) * width * 0.38, 54, width - 54)
