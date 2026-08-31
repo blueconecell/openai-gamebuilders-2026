@@ -21,11 +21,13 @@ import {
 } from './logic'
 import { previewPart, rewardScrapValue, rollRewardChoices } from './rewards'
 import {
+  COMBAT_CLEAR_DURATION,
   OVERFLOW_COOLDOWN,
   OVERFLOW_DURATION,
   OVERFLOW_THRESHOLD,
   basicCannonOffsets,
   resolvedCombatPhase,
+  type CombatPhase,
 } from './combat'
 
 type Phase =
@@ -161,6 +163,8 @@ export function createGame(
   let shieldFlash = 0
   let collisionTimer = 0
   let enemyAttackTimer = 1.2
+  let combatClearTime = 0
+  let clearedCombatPhase: CombatPhase | null = null
   let explored = restoredRun?.explored ?? 0
   let unknownDiscovered = explored > 0
   let unknownResolved = explored >= 100
@@ -192,13 +196,15 @@ export function createGame(
     const ratio = Math.min(window.devicePixelRatio || 1, 2)
     const nextWidth = Math.max(320, Math.round(rect.width || 1280))
     const nextHeight = Math.max(420, Math.round(rect.height || 720))
-    if (canvas.width !== nextWidth * ratio || canvas.height !== nextHeight * ratio) {
-      canvas.width = nextWidth * ratio
-      canvas.height = nextHeight * ratio
-      width = nextWidth
-      height = nextHeight
-      ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
+    const pixelWidth = Math.round(nextWidth * ratio)
+    const pixelHeight = Math.round(nextHeight * ratio)
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth
+      canvas.height = pixelHeight
     }
+    width = nextWidth
+    height = nextHeight
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
   }
 
   const persist = () => writeSave(save, storage)
@@ -314,6 +320,8 @@ export function createGame(
     mines = []
     enemyBullets = []
     enemyAttackTimer = 1.1
+    combatClearTime = 0
+    clearedCombatPhase = null
     message = '코어를 바로 노리거나 외부 모듈부터 해체하세요'
   }
 
@@ -339,6 +347,8 @@ export function createGame(
     mines = []
     enemyBullets = []
     enemyAttackTimer = 0.9
+    combatClearTime = 0
+    clearedCombatPhase = null
     message = '코어 직접 타격 가능 · 외부 무기를 먼저 끊을 수도 있습니다'
   }
 
@@ -354,10 +364,29 @@ export function createGame(
   const finishCombat = (defeatedEnemy: EnemyShip) => {
     if (enemy !== defeatedEnemy) return
     const completedPhase = resolvedCombatPhase(phase, defeatedEnemy.modules)
-    if (!completedPhase) return
+    if (!completedPhase || combatClearTime > 0) return
     bullets = []
     mines = []
     enemyBullets = []
+    velocity = { x: 0, y: 0 }
+    stick = null
+    boostTime = 0
+    clearedCombatPhase = completedPhase
+    combatClearTime = COMBAT_CLEAR_DURATION
+    overflowPulse = completedPhase === 'boss' ? 2.4 : 1.4
+    message = completedPhase === 'boss' ? 'MAIN CORE DESTROYED · LIMIT BREAK' : 'TARGET CORE DESTROYED · SIGNAL CLEAR'
+  }
+
+  const completeCombat = () => {
+    const completedPhase = clearedCombatPhase
+    if (!completedPhase) return
+    if (phase !== completedPhase || !enemy || resolvedCombatPhase(phase, enemy.modules) !== completedPhase) {
+      clearedCombatPhase = null
+      combatClearTime = 0
+      return
+    }
+    clearedCombatPhase = null
+    combatClearTime = 0
     enemy = null
     relocateToVoid()
     if (completedPhase === 'elite') {
@@ -407,6 +436,8 @@ export function createGame(
     enemyBullets = []
     overflowTime = 0
     overflowCooldown = 0
+    combatClearTime = 0
+    clearedCombatPhase = null
     explored = 0
     unknownDiscovered = false
     unknownResolved = false
@@ -706,7 +737,7 @@ export function createGame(
 
   const triggerBoost = () => {
     const steerable = phase === 'void' || phase === 'elite' || phase === 'boss'
-    if (!steerable || boostCooldown > 0 || warpTimer > 0) return
+    if (!steerable || combatClearTime > 0 || boostCooldown > 0 || warpTimer > 0) return
     const movement = movementVector()
     const hasDirection = Math.hypot(movement.x, movement.y) > 0.05
     const angle = hasDirection ? Math.atan2(movement.y, movement.x) : heading
@@ -914,7 +945,7 @@ export function createGame(
       }
       return true
     })
-    if (!enemy) return
+    if (!enemy || combatClearTime > 0) return
 
     mines = mines.filter((mine) => {
       mine.life -= dt
@@ -924,7 +955,7 @@ export function createGame(
       overflowPulse = 0.4
       return false
     })
-    if (!enemy) return
+    if (!enemy || combatClearTime > 0) return
 
     enemyAttackTimer -= dt
     if (enemyAttackTimer <= 0) {
@@ -985,6 +1016,8 @@ export function createGame(
       flash = 0.25
       if (hit.kind === 'armor' && hit.hp <= 0) message = '외부 장갑 파괴 · 핵심 코어 노출 위험'
       if (playerCore().hp <= 0) {
+        combatClearTime = 0
+        clearedCombatPhase = null
         phase = 'defeat'
         enemy = null
         bullets = []
@@ -1024,7 +1057,10 @@ export function createGame(
       }
       if (warpTimer <= 0) message = '워프 완료 · 메인 신호까지 직접 접근하세요'
     } else if (phase === 'void') updateMovement(dt)
-    if (phase === 'elite' || phase === 'boss') updateCombat(dt)
+    if (combatClearTime > 0) {
+      combatClearTime = Math.max(0, combatClearTime - dt)
+      if (combatClearTime <= 0) completeCombat()
+    } else if (phase === 'elite' || phase === 'boss') updateCombat(dt)
     if (phase === 'delivery') {
       deliveryTimer += dt
       if (deliveryTimer >= 1.8) {
@@ -1333,7 +1369,7 @@ export function createGame(
   }
 
   const drawBoostControl = () => {
-    if ((phase !== 'void' && phase !== 'elite' && phase !== 'boss') || warpTimer > 0) return
+    if ((phase !== 'void' && phase !== 'elite' && phase !== 'boss') || combatClearTime > 0 || warpTimer > 0) return
     const ready = boostCooldown <= 0
     const size = 72
     const x = width - size - 28
@@ -1437,6 +1473,43 @@ export function createGame(
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(progress < 0.5 ? 'WARP // FOLDING SPACE' : 'WARP // EXIT VECTOR', 0, 0)
+    ctx.restore()
+  }
+
+  const drawCombatClear = (time: number) => {
+    if (combatClearTime <= 0 || !clearedCombatPhase) return
+    const progress = 1 - combatClearTime / COMBAT_CLEAR_DURATION
+    const pulse = Math.sin(progress * Math.PI)
+    const accent = clearedCombatPhase === 'boss' ? AMBER : CYAN
+    const radius = 52 + progress * Math.min(width, height) * 0.32
+    ctx.save()
+    ctx.fillStyle = `rgba(3,9,14,${0.18 + pulse * 0.28})`
+    ctx.fillRect(0, 0, width, height)
+    ctx.translate(width / 2, height / 2)
+    ctx.strokeStyle = accent
+    ctx.globalAlpha = 0.25 + pulse * 0.7
+    ctx.lineWidth = 2 + pulse * 3
+    ctx.beginPath()
+    ctx.arc(0, 0, radius, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.rotate(time * 0.0012)
+    for (let index = 0; index < 12; index += 1) {
+      const angle = index / 12 * Math.PI * 2
+      ctx.beginPath()
+      ctx.moveTo(Math.cos(angle) * (radius * 0.72), Math.sin(angle) * (radius * 0.72))
+      ctx.lineTo(Math.cos(angle) * radius, Math.sin(angle) * radius)
+      ctx.stroke()
+    }
+    ctx.rotate(-time * 0.0012)
+    ctx.globalAlpha = Math.min(1, progress * 5) * Math.min(1, (1 - progress) * 6)
+    ctx.fillStyle = accent
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font = `800 ${width < 520 ? 25 : 38}px ui-monospace, monospace`
+    ctx.fillText(clearedCombatPhase === 'boss' ? 'LIMIT BREAK' : 'SIGNAL CLEAR', 0, -8)
+    ctx.fillStyle = '#d9ffff'
+    ctx.font = '700 11px ui-monospace, monospace'
+    ctx.fillText('CORE DESTROYED // ROUTE SECURED', 0, 27)
     ctx.restore()
   }
 
@@ -2196,6 +2269,7 @@ export function createGame(
     if (phase !== 'tutorial') drawHud()
     drawOverflowStatus()
     drawMassHelp()
+    drawCombatClear(time)
     drawHoverTooltip()
     if (overflowPulse > 0) {
       ctx.strokeStyle = `rgba(255,189,89,${Math.min(1, overflowPulse) * 0.65})`

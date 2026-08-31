@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  COMBAT_CLEAR_DURATION,
   OVERFLOW_COOLDOWN,
   OVERFLOW_DURATION,
   OVERFLOW_THRESHOLD,
@@ -17,6 +18,7 @@ describe('OVERFLOW basic cannon', () => {
     expect(OVERFLOW_THRESHOLD).toBe(10)
     expect(OVERFLOW_DURATION).toBe(6)
     expect(OVERFLOW_COOLDOWN).toBe(15)
+    expect(COMBAT_CLEAR_DURATION).toBe(1.2)
   })
 })
 

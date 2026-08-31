@@ -1,6 +1,7 @@
 export const OVERFLOW_THRESHOLD = 10
 export const OVERFLOW_DURATION = 6
 export const OVERFLOW_COOLDOWN = 15
+export const COMBAT_CLEAR_DURATION = 1.2
 
 export type CombatPhase = 'elite' | 'boss'
 
