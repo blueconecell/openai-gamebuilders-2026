@@ -6,6 +6,14 @@ const STYLE_ID = 'gb-screens-style'
  * renders correctly when mounted outside the main shell.
  */
 const CSS = `
+/* Screens own their box model: the shared stylesheet is not guaranteed to be loaded. */
+.gb-screen,
+.gb-screen *,
+.gb-screen *::before,
+.gb-screen *::after {
+  box-sizing: border-box;
+}
+
 .gb-screen {
   --gb-cyan: var(--cyan, #69e6e8);
   --gb-amber: var(--amber, #ffb84a);
@@ -21,12 +29,21 @@ const CSS = `
   height: 100%;
   min-height: 0;
   padding: clamp(14px, 3vw, 30px);
+  overflow-x: hidden;
   overflow-y: auto;
   color: #e9ffff;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   background:
     radial-gradient(120% 90% at 50% 0%, rgba(105, 230, 232, 0.07), transparent 62%),
     #05070a;
+}
+
+/* Keep the column readable on desktop instead of stretching panels edge to edge. */
+.gb-screen > * {
+  width: 100%;
+  max-width: 760px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .gb-eyebrow {

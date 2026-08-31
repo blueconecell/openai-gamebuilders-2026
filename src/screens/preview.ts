@@ -99,4 +99,9 @@ for (const name of Object.keys(screens)) {
   tabs.appendChild(button)
 }
 
-show('lobby')
+function initial(): keyof typeof screens {
+  const requested = new URL(location.href).searchParams.get('screen') ?? ''
+  return requested in screens ? requested : 'lobby'
+}
+
+show(initial())
