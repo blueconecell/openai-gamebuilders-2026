@@ -100,6 +100,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   let fireTimer = 0
   const equipmentTimers = { homing: 0, mine: 0, saw: 0, explosive: 0, interceptor: 0, repair: 0 }
   let shieldFlash = 0
+  let collisionTimer = 0
   let enemyAttackTimer = 1.2
   let explored = restoredRun?.explored ?? 0
   let unknownDiscovered = explored > 0
@@ -179,6 +180,38 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     }
   }
 
+  const resolveShipCollision = () => {
+    if (!enemy) return
+    let dx = enemy.x - player.x
+    let dy = enemy.y - player.y
+    let distance = Math.hypot(dx, dy)
+    if (distance >= 105) return
+    if (distance < 0.01) {
+      dx = Math.cos(heading)
+      dy = Math.sin(heading)
+      distance = 1
+    }
+    const nx = dx / distance
+    const ny = dy / distance
+    const overlap = 105 - distance
+    player.x = clamp(player.x - nx * overlap * 0.45, 60, WORLD.w - 60)
+    player.y = clamp(player.y - ny * overlap * 0.45, 60, WORLD.h - 60)
+    enemy.x = clamp(enemy.x + nx * overlap * 0.55, 60, WORLD.w - 60)
+    enemy.y = clamp(enemy.y + ny * overlap * 0.55, 60, WORLD.h - 60)
+    const approachSpeed = velocity.x * nx + velocity.y * ny
+    if (approachSpeed > 0) {
+      velocity.x -= nx * approachSpeed * 1.45
+      velocity.y -= ny * approachSpeed * 1.45
+    }
+    velocity.x -= nx * 12
+    velocity.y -= ny * 12
+    if (collisionTimer <= 0) {
+      collisionTimer = 0.55
+      shieldFlash = 0.16
+      message = '기체 충돌 · 서로 밀려났습니다'
+    }
+  }
+
   const damageEnemyPart = (part: EnemyModule, damage: number) => {
     if (part.kind === 'core' && !coreExposed()) {
       message = '코어 차폐됨 · 연결된 방어 모듈을 먼저 파괴하세요'
@@ -241,24 +274,36 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     message = '두 보호 모듈이 코어를 가리고 있습니다'
   }
 
+  const relocateToVoid = () => {
+    player = { x: WORLD.w * 0.5, y: WORLD.h * 0.5 }
+    heading = -Math.PI / 2
+    velocity = { x: 0, y: 0 }
+    idleTime = 4
+    cloaked = true
+    stick = null
+  }
+
   const finishCombat = () => {
     bullets = []
     mines = []
     enemyBullets = []
     enemy = null
+    relocateToVoid()
     if (phase === 'elite') {
       save.scrap += 10
       persist()
       pendingPart = ADD_THREE
       pendingSelected = false
       phase = 'reward'
-      message = '회수한 증강을 장착하거나 분해하세요'
+      message = '공백 복귀 완료 · 회수한 부품을 처리하세요'
     } else {
-      phase = 'victory'
+      phase = 'void'
       save.victories += 1
-      persist()
       overflowPulse = 3
-      message = 'LIMIT 신호를 돌파했습니다'
+      unknownResolved = true
+      explored = 100
+      persistSafeRun()
+      message = 'LIMIT 돌파 · 공백 지역으로 자동 복귀했습니다'
     }
   }
 
@@ -380,12 +425,13 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     if (stick && stick.pointerId === event.pointerId) stick = null
   }
   const onKeyDown = (event: KeyboardEvent) => {
-    keys.add(event.key.toLowerCase())
-    if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(event.key.toLowerCase())) {
+    const code = event.code.toLowerCase()
+    keys.add(code)
+    if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'space'].includes(code)) {
       event.preventDefault()
     }
   }
-  const onKeyUp = (event: KeyboardEvent) => keys.delete(event.key.toLowerCase())
+  const onKeyUp = (event: KeyboardEvent) => keys.delete(event.code.toLowerCase())
   const onBlur = () => {
     keys.clear()
     stick = null
@@ -412,10 +458,10 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const movementVector = (): Point => {
     let x = 0
     let y = 0
-    if (keys.has('a') || keys.has('arrowleft')) x -= 1
-    if (keys.has('d') || keys.has('arrowright')) x += 1
-    if (keys.has('w') || keys.has('arrowup')) y -= 1
-    if (keys.has('s') || keys.has('arrowdown')) y += 1
+    if (keys.has('keya') || keys.has('arrowleft')) x -= 1
+    if (keys.has('keyd') || keys.has('arrowright')) x += 1
+    if (keys.has('keyw') || keys.has('arrowup')) y -= 1
+    if (keys.has('keys') || keys.has('arrowdown')) y += 1
 
     if (x || y) {
       const length = Math.hypot(x, y)
@@ -510,11 +556,12 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     if (nearbyMine) chaseAngle += Math.sin(performance.now() * 0.003) > 0 ? 0.65 : -0.65
     enemy.heading = turnToward(enemy.heading, chaseAngle, dt * 1.25)
     const chaseDistance = Math.hypot(player.x - enemy.x, player.y - enemy.y)
-    if (chaseDistance > 215) {
+    if (chaseDistance > 92) {
       const chaseSpeed = phase === 'boss' ? 22 : 27
       enemy.x += Math.cos(enemy.heading) * chaseSpeed * dt
       enemy.y += Math.sin(enemy.heading) * chaseSpeed * dt
     }
+    resolveShipCollision()
     fireTimer -= dt
     if (fireTimer <= 0) {
       for (const side of [-1, 1]) {
@@ -694,6 +741,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const update = (dt: number) => {
     flash = Math.max(0, flash - dt)
     shieldFlash = Math.max(0, shieldFlash - dt)
+    collisionTimer = Math.max(0, collisionTimer - dt)
     overflowPulse = Math.max(0, overflowPulse - dt)
     if (phase === 'void') updateMovement(dt)
     if (phase === 'elite' || phase === 'boss') updateCombat(dt)
