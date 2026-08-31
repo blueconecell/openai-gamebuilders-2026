@@ -1,4 +1,4 @@
-# OVERFLOW: FAR SPACE
+# 무한항로
 
 OpenAI GameBuilders 2026 본선용 클라이언트 게임 데모입니다.
 

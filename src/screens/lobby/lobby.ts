@@ -38,7 +38,7 @@ export function createLobbyScreen(props: LobbyProps): ScreenHandle<LobbyProps> {
     const eyebrow = element('p', 'gb-eyebrow')
     eyebrow.textContent = 'GB//26 · GO LIMITLESS'
     const title = element('h1', 'gb-title')
-    title.innerHTML = 'OVERFLOW<span>:</span> FAR SPACE'
+    title.textContent = '무한항로'
     head.append(eyebrow, title)
 
     const hangar = element('div', 'gb-panel gb-ship')
