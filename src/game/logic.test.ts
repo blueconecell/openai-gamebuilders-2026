@@ -9,6 +9,7 @@ import {
   partDurability,
   partResaleValue,
   readSave,
+  shipSocketLayout,
   writeSave,
   type OperatorPart,
 } from './logic'
@@ -49,6 +50,21 @@ describe('operator rail', () => {
     expect(calculateMassLimit([null])).toBe(15)
     expect(calculateMassLimit([body, body])).toBe(27)
     expect(movementScale(23, calculateMassLimit([body]))).toBeCloseTo(0.85)
+  })
+
+  it('grows new sockets outward from chained body modules', () => {
+    const body = { kind: 'body' as const, mass: 4 }
+    const first = shipSocketLayout([null, null, null, body])
+    expect(first).toHaveLength(5)
+    expect(first[4].index).toBe(7)
+    expect(first[4].parentIndex).toBe(3)
+    expect(first[4].y).toBeGreaterThan(first[3].y)
+
+    const chained = shipSocketLayout([null, null, null, body, null, null, null, body])
+    expect(chained).toHaveLength(6)
+    expect(chained[5].index).toBe(11)
+    expect(chained[5].parentIndex).toBe(7)
+    expect(chained[5].y).toBeGreaterThan(chained[4].y)
   })
 
   it('assigns deliberately fragile durability by part category', () => {
@@ -118,6 +134,24 @@ describe('local save', () => {
     })
     expect(restored.safeRun?.xRatio).toBe(3.5)
     expect(restored.safeRun?.yRatio).toBe(-2)
+  })
+
+  it('moves legacy outer equipment onto a body child socket', () => {
+    const restored = readSave({
+      getItem: () => JSON.stringify({
+        safeRun: {
+          slots: [
+            { kind: 'add', value: 1, mass: 2 },
+            { kind: 'weapon', weapon: 'mine', mass: 3 },
+            null,
+            { kind: 'body', mass: 2 },
+            { kind: 'defense', defense: 'shield', mass: 4 },
+          ],
+        },
+      }),
+    })
+    expect(restored.safeRun?.slots[4]).toBeNull()
+    expect(restored.safeRun?.slots[7]).toEqual({ kind: 'defense', defense: 'shield', mass: 4 })
   })
 
   it('restores weapon, body, and defense attachments', () => {

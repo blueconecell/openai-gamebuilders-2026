@@ -1,4 +1,4 @@
-import { calculateMass, calculateMassLimit, calculatePower, type ShipPart } from '../../game/logic'
+import { calculateMass, calculateMassLimit, calculatePower, firstOpenSocket, type ShipPart } from '../../game/logic'
 import { unlockedSockets, type ShipSlots } from '../screen'
 
 export type ShopItem = {
@@ -33,7 +33,7 @@ export const DEFAULT_SHOP_ITEMS: ShopItem[] = [
   {
     id: 'frame',
     name: '확장 프레임',
-    detail: '부품 소켓 1개를 열고 질량 한도를 6 늘립니다.',
+    detail: '장착 방향 바깥에 연결 소켓을 열고 질량 한도를 6 늘립니다.',
     cost: 5,
     part: { kind: 'body', mass: 4 },
   },
@@ -57,12 +57,11 @@ export function previewPurchase(
   const socketsBefore = unlockedSockets(slots)
 
   // The shop can only estimate: the pilot picks the real socket in the hangar.
-  const openSocket = slots.findIndex((slot, index) => !slot && index < socketsBefore)
+  const openSocket = firstOpenSocket(slots)
   const hasRoom = openSocket >= 0
 
-  const projected = hasRoom
-    ? slots.map((slot, index) => (index === openSocket ? item.part : slot))
-    : slots
+  const projected = [...slots]
+  if (hasRoom) projected[openSocket] = item.part
 
   const powerAfter = calculatePower(2, projected)
   const massAfter = calculateMass(projected)

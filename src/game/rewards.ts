@@ -1,4 +1,4 @@
-import { calculateMass, calculateMassLimit, calculatePower, type ShipPart } from './logic'
+import { calculateMass, calculateMassLimit, calculatePower, firstOpenSocket, type ShipPart } from './logic'
 
 export type PartPreview = {
   fireBefore: number
@@ -11,11 +11,12 @@ export type PartPreview = {
   canAttach: boolean
 }
 
-export function previewPart(slots: Array<ShipPart | null>, part: ShipPart, unlockedSockets: number): PartPreview {
+export function previewPart(slots: Array<ShipPart | null>, part: ShipPart, _unlockedSockets: number): PartPreview {
   const fireBefore = calculatePower(2, slots)
   const massBefore = calculateMass(slots)
-  const target = slots.findIndex((slot, index) => !slot && index < unlockedSockets)
-  const previewSlots = slots.map((slot, index) => index === target ? part : slot)
+  const target = firstOpenSocket(slots)
+  const previewSlots = [...slots]
+  if (target >= 0) previewSlots[target] = part
   const massAfter = massBefore + part.mass
   return {
     fireBefore,

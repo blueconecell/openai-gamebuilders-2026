@@ -10,6 +10,15 @@ export type WeaponPart = { kind: 'weapon'; weapon: WeaponKind; mass: number }
 export type BodyPart = { kind: 'body'; mass: number }
 export type DefensePart = { kind: 'defense'; defense: DefenseKind; mass: number }
 export type ShipPart = OperatorPart | WeaponPart | BodyPart | DefensePart
+export type ShipSocket = { index: number; x: number; y: number; parentIndex: number | null }
+
+const BASE_SOCKETS: ShipSocket[] = [
+  { index: 0, x: 38, y: -24, parentIndex: null },
+  { index: 1, x: 38, y: 24, parentIndex: null },
+  { index: 2, x: 0, y: -46, parentIndex: null },
+  { index: 3, x: 0, y: 46, parentIndex: null },
+]
+export const MAX_SHIP_SLOTS = 40
 
 export type SaveData = {
   scrap: number
@@ -51,6 +60,34 @@ export function calculateMass(slots: Array<ShipPart | null>): number {
 
 export function calculateMassLimit(slots: Array<ShipPart | null>): number {
   return 15 + slots.filter((part) => part?.kind === 'body').length * 6
+}
+
+export function isSocketUnlocked(slots: Array<ShipPart | null>, index: number): boolean {
+  return index < 4 || slots[index - 4]?.kind === 'body'
+}
+
+export function firstOpenSocket(slots: Array<ShipPart | null>): number {
+  return shipSocketLayout(slots).find((socket) => !slots[socket.index])?.index ?? -1
+}
+
+/** Each BODY opens one child socket farther out on the same radial branch. */
+export function shipSocketLayout(slots: Array<ShipPart | null>): ShipSocket[] {
+  const layout = BASE_SOCKETS.map((socket) => ({ ...socket }))
+  for (let parentIndex = 0; parentIndex < slots.length; parentIndex += 1) {
+    if (slots[parentIndex]?.kind !== 'body' || !isSocketUnlocked(slots, parentIndex)) continue
+    const childIndex = parentIndex + 4
+    if (childIndex >= MAX_SHIP_SLOTS) continue
+    const root = BASE_SOCKETS[childIndex % 4]
+    const distance = Math.hypot(root.x, root.y) || 1
+    const depth = Math.floor(childIndex / 4)
+    layout.push({
+      index: childIndex,
+      x: root.x + root.x / distance * 48 * depth,
+      y: root.y + root.y / distance * 48 * depth,
+      parentIndex,
+    })
+  }
+  return layout.sort((a, b) => a.index - b.index)
 }
 
 export function movementScale(mass: number, limit = 15): number {
@@ -113,16 +150,39 @@ function validSafeRun(value: unknown): SafeRun | null {
   const run = value as Partial<SafeRun>
   if (!Array.isArray(run.slots)) return null
 
-  const slots = run.slots.slice(0, 6).map(validPart)
+  const slots = run.slots.slice(0, MAX_SHIP_SLOTS).map(validPart)
   const savedIntegrity = Array.isArray(run.slotIntegrity) ? run.slotIntegrity : []
+  const integrity = slots.map((part, index) => part
+    ? Math.min(partDurability(part), validIntegrity(savedIntegrity[index], partDurability(part)))
+    : 0)
+  migrateLegacyOuterSlots(slots, integrity, run.slots.length)
   return {
     xRatio: validRatio(run.xRatio, 0.3),
     yRatio: validRatio(run.yRatio, 0.52),
     explored: Math.min(100, validCount(run.explored)),
     slots,
-    slotIntegrity: slots.map((part, index) => part
-      ? Math.min(partDurability(part), validIntegrity(savedIntegrity[index], partDurability(part)))
-      : 0),
+    slotIntegrity: integrity,
+  }
+}
+
+function migrateLegacyOuterSlots(
+  slots: Array<ShipPart | null>,
+  integrity: number[],
+  savedLength: number,
+): void {
+  if (savedLength > 6) return
+  for (const legacyIndex of [4, 5]) {
+    const part = slots[legacyIndex]
+    if (!part || isSocketUnlocked(slots, legacyIndex)) continue
+    const layout = shipSocketLayout(slots)
+    const target = layout.find((socket) => socket.index >= 4 && !slots[socket.index])?.index
+      ?? layout.find((socket) => !slots[socket.index])?.index
+      ?? -1
+    if (target < 0) continue
+    slots[target] = part
+    integrity[target] = integrity[legacyIndex]
+    slots[legacyIndex] = null
+    integrity[legacyIndex] = 0
   }
 }
 

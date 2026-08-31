@@ -1,17 +1,7 @@
-import { calculateMass, calculateMassLimit, calculatePower } from '../../game/logic'
+import { calculateMass, calculateMassLimit, calculatePower, shipSocketLayout } from '../../game/logic'
 import { partColor, partKindLabel, partLabel, unlockedSockets, type ShipSlots } from '../screen'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
-
-/** Socket anchors mirror the in-game hull layout so the preview stays recognisable. */
-const SOCKETS = [
-  { x: 38, y: -24 },
-  { x: 38, y: 24 },
-  { x: 0, y: -46 },
-  { x: 0, y: 46 },
-  { x: -42, y: -25 },
-  { x: -42, y: 25 },
-]
 
 const CYAN = '#69e6e8'
 const AMBER = '#ffb84a'
@@ -29,9 +19,10 @@ function node(tag: string, attrs: Record<string, string>): SVGElement {
 export function createShipPreview(slots: ShipSlots): SVGElement {
   const power = calculatePower(2, slots)
   const accent = power >= 10 ? AMBER : CYAN
-  const unlocked = unlockedSockets(slots)
+  const sockets = shipSocketLayout(slots)
+  const extent = Math.max(64, ...sockets.map((socket) => Math.max(Math.abs(socket.x), Math.abs(socket.y)) + 18))
   const svg = node('svg', {
-    viewBox: '-64 -64 128 128',
+    viewBox: `${-extent} ${-extent} ${extent * 2} ${extent * 2}`,
     role: 'img',
     'aria-label': `화력 ${power}, 장착 부품 ${slots.filter(Boolean).length}개`,
   })
@@ -43,10 +34,13 @@ export function createShipPreview(slots: ShipSlots): SVGElement {
     }))
   }
 
-  SOCKETS.forEach((socket, index) => {
-    if (index >= unlocked) return
+  sockets.forEach((socket) => {
+    const index = socket.index
+    const parent = socket.parentIndex === null
+      ? { x: socket.x * 0.3, y: socket.y * 0.3 }
+      : sockets.find((candidate) => candidate.index === socket.parentIndex) ?? { x: 0, y: 0 }
     svg.appendChild(node('line', {
-      x1: `${socket.x * 0.3}`, y1: `${socket.y * 0.3}`,
+      x1: `${parent.x}`, y1: `${parent.y}`,
       x2: `${socket.x}`, y2: `${socket.y}`,
       stroke: slots[index] ? '#4d7c86' : 'rgba(105,230,232,.28)', 'stroke-width': '2',
     }))
@@ -63,15 +57,15 @@ export function createShipPreview(slots: ShipSlots): SVGElement {
   svg.appendChild(node('circle', { cx: '0', cy: '0', r: '9', fill: accent }))
   svg.appendChild(node('circle', { cx: '0', cy: '0', r: '3.6', fill: '#071016' }))
 
-  SOCKETS.forEach((socket, index) => {
+  sockets.forEach((socket) => {
+    const index = socket.index
     const part = slots[index]
-    const locked = index >= unlocked
 
     if (!part) {
       svg.appendChild(node('rect', {
         x: `${socket.x - 9}`, y: `${socket.y - 9}`, width: '18', height: '18',
-        fill: 'none', stroke: locked ? '#2a3439' : 'rgba(105,230,232,.28)',
-        'stroke-width': '2', 'stroke-dasharray': locked ? '2 4' : '3 3',
+        fill: 'none', stroke: 'rgba(105,230,232,.28)',
+        'stroke-width': '2', 'stroke-dasharray': '3 3',
       }))
       return
     }

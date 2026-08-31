@@ -2,10 +2,13 @@ import {
   calculateMass,
   calculateMassLimit,
   calculatePower,
+  firstOpenSocket,
+  isSocketUnlocked,
   movementScale,
   partDurability,
   partResaleValue,
   readSave,
+  shipSocketLayout,
   writeSave,
   type DefenseKind,
   type OperatorPart,
@@ -117,10 +120,8 @@ export function createGame(
   let save: SaveData = readSave(storage)
   phase = save.tutorialSeen ? 'void' : 'tutorial'
   const restoredRun = save.safeRun
-  let slots: Array<ShipPart | null> = Array.from(
-    { length: 6 },
-    (_, index) => restoredRun?.slots[index] ?? (index === 0 ? ADD_ONE : null),
-  )
+  let slots: Array<ShipPart | null> = restoredRun?.slots.slice()
+    ?? [ADD_ONE, null, null, null]
   let slotIntegrity = slots.map((part, index) => part
     ? restoredRun?.slotIntegrity[index] ?? partDurability(part)
     : 0)
@@ -166,6 +167,7 @@ export function createGame(
   let message = '자유 항해 중 · 센서 범위에서 미지 구역을 찾으세요'
   let buttons: Button[] = []
   let shopPage = 0
+  let shopManagePage = 0
   let selectedMountedSlot: number | null = null
   let selectedSwapSlot: number | null = null
   let massHelpOpen = false
@@ -223,14 +225,16 @@ export function createGame(
     slotIntegrity[index] = Math.max(0, slotIntegrity[index] - damage)
     if (slotIntegrity[index] > 0) return
     const destroyed = partLabel(part)
+    const destroyedWasBody = part.kind === 'body'
     slots[index] = null
     message = `${destroyed} 부품 파괴 · 연결 효과 상실`
-    const unlocked = unlockedSocketCount(slots)
-    for (let orphan = unlocked; orphan < slots.length; orphan += 1) {
-      if (!slots[orphan]) continue
-      slots[orphan] = null
-      slotIntegrity[orphan] = 0
-      message = `${destroyed} 파괴 · 바깥 연결 부품도 분리됨`
+    if (destroyedWasBody) {
+      for (let orphan = index + 4; orphan < slots.length; orphan += 4) {
+        if (!slots[orphan]) continue
+        slots[orphan] = null
+        slotIntegrity[orphan] = 0
+        message = `${destroyed} 파괴 · 연결된 외곽 부품도 분리됨`
+      }
     }
   }
 
@@ -239,7 +243,11 @@ export function createGame(
     let dx = enemy.x - player.x
     let dy = enemy.y - player.y
     let distance = Math.hypot(dx, dy)
-    if (distance >= 105) return
+    const hullRadius = Math.max(50, ...shipSocketLayout(slots)
+      .filter((socket) => slots[socket.index])
+      .map((socket) => Math.hypot(socket.x, socket.y) + 16))
+    const collisionDistance = hullRadius + 55
+    if (distance >= collisionDistance) return
     if (distance < 0.01) {
       dx = Math.cos(heading)
       dy = Math.sin(heading)
@@ -247,7 +255,7 @@ export function createGame(
     }
     const nx = dx / distance
     const ny = dy / distance
-    const overlap = 105 - distance
+    const overlap = collisionDistance - distance
     player.x -= nx * overlap * 0.45
     player.y -= ny * overlap * 0.45
     enemy.x += nx * overlap * 0.55
@@ -369,8 +377,8 @@ export function createGame(
 
   const resetRun = () => {
     phase = 'void'
-    slots = [ADD_ONE, null, null, null, null, null]
-    slotIntegrity = [partDurability(ADD_ONE), 0, 0, 0, 0, 0]
+    slots = [ADD_ONE, null, null, null]
+    slotIntegrity = [partDurability(ADD_ONE), 0, 0, 0]
     pendingPart = null
     rewardChoices = []
     selectedRewardIndex = null
@@ -421,7 +429,7 @@ export function createGame(
   }
 
   const selectSocket = (index: number) => {
-    if (!pendingPart || !pendingSelected || slots[index] || index >= unlockedSocketCount(slots)) return
+    if (!pendingPart || !pendingSelected || slots[index] || !isSocketUnlocked(slots, index)) return
     slots[index] = pendingPart
     slotIntegrity[index] = partDurability(pendingPart)
     pendingPart = null
@@ -486,9 +494,11 @@ export function createGame(
       message = `${partLabel(part)} 판매를 한 번 더 눌러 확정하세요`
       return
     }
-    const remainingSlots = slots.map((candidate, candidateIndex) => candidateIndex === index ? null : candidate)
-    const remainingUnlocked = unlockedSocketCount(remainingSlots)
-    if (part.kind === 'body' && remainingSlots.slice(remainingUnlocked).some(Boolean)) {
+    const hasAttachedDescendant = part.kind === 'body'
+      && slots.some((candidate, candidateIndex) => candidateIndex > index
+        && (candidateIndex - index) % 4 === 0
+        && Boolean(candidate))
+    if (hasAttachedDescendant) {
       selectedMountedSlot = null
       message = '몸체 제거 불가 · 연결된 외곽 장비를 먼저 판매하세요'
       return
@@ -518,13 +528,20 @@ export function createGame(
       message = '순서 교환 선택을 취소했습니다'
       return
     }
-    if (index >= unlockedSocketCount(slots)) {
+    if (!isSocketUnlocked(slots, index)) {
       message = '잠긴 소켓에는 배치할 수 없습니다'
       return
     }
     const sourceIndex = selectedSwapSlot
     if (!slots[sourceIndex]) {
       selectedSwapSlot = null
+      return
+    }
+    const projected = [...slots]
+    ;[projected[sourceIndex], projected[index]] = [projected[index], projected[sourceIndex]]
+    const createsOrphan = projected.some((candidate, candidateIndex) => candidate && !isSocketUnlocked(projected, candidateIndex))
+    if (createsOrphan) {
+      message = '배치 불가 · BODY에 연결된 외곽 부품을 먼저 이동하세요'
       return
     }
     const before = calculatePower(2, slots)
@@ -932,7 +949,9 @@ export function createGame(
       }
       const slotHit = slots.findIndex((part, index) => {
         if (!part || slotIntegrity[index] <= 0) return false
-        const pos = rotatedOffsetPosition(SOCKETS[index], player, heading)
+        const socket = shipSocketLayout(slots).find((candidate) => candidate.index === index)
+        if (!socket) return false
+        const pos = rotatedOffsetPosition(socket, player, heading)
         return Math.hypot(pos.x - shot.x, pos.y - shot.y) <= 14
       })
       if (slotHit >= 0) {
@@ -963,7 +982,7 @@ export function createGame(
           scrapGained: 0,
           defeated: unknownResolved ? ['미지 정예기체 // WARDEN'] : [],
           discoveries: save.discoveries,
-          slots: [ADD_ONE, null, null, null, null, null],
+          slots: [ADD_ONE, null, null, null],
         })
       }
       return false
@@ -1112,16 +1131,6 @@ export function createGame(
     ctx.globalAlpha = 1
   }
 
-  // Socket anchors around the core, in hull space (nose points along +x).
-  const SOCKETS: Point[] = [
-    { x: 38, y: -24 },
-    { x: 38, y: 24 },
-    { x: 0, y: -46 },
-    { x: 0, y: 46 },
-    { x: -42, y: -25 },
-    { x: -42, y: 25 },
-  ]
-
   const drawPlayer = () => {
     const pulse = 0.75 + Math.sin(performance.now() * 0.008) * 0.2
     const accent = overflowTime > 0 ? AMBER : CYAN
@@ -1163,12 +1172,16 @@ export function createGame(
     }
 
     // Empty socket brackets make the expandable frame legible from the first frame.
-    for (let index = 0; index < SOCKETS.length; index += 1) {
-      const socket = SOCKETS[index]
+    const socketLayout = shipSocketLayout(slots)
+    for (const socket of socketLayout) {
+      const index = socket.index
+      const parent = socket.parentIndex === null
+        ? { x: socket.x * 0.35, y: socket.y * 0.35 }
+        : socketLayout.find((candidate) => candidate.index === socket.parentIndex) ?? { x: 0, y: 0 }
       ctx.strokeStyle = slots[index] ? overflowTime > 0 ? AMBER : '#4d7c86' : 'rgba(101,245,237,.28)'
       ctx.lineWidth = 2
       ctx.beginPath()
-      ctx.moveTo(socket.x * 0.35, socket.y * 0.35)
+      ctx.moveTo(parent.x, parent.y)
       ctx.lineTo(socket.x, socket.y)
       ctx.stroke()
       if (!slots[index]) {
@@ -1252,10 +1265,10 @@ export function createGame(
     ctx.fill()
 
     // Installed parts are physical targets; their small bars expose remaining integrity.
-    for (let index = 0; index < SOCKETS.length; index += 1) {
+    for (const socket of socketLayout) {
+      const index = socket.index
       const part = slots[index]
       if (!part) continue
-      const socket = SOCKETS[index]
       const color = partColor(part)
       ctx.save()
       ctx.translate(socket.x, socket.y)
@@ -1891,8 +1904,9 @@ export function createGame(
     const compact = width < 520
     const cx = panel.x + panel.w * (compact ? 0.64 : 0.62)
     const cy = panel.y + 250
-    const scale = compact ? 1.05 : 1.35
-    const unlocked = unlockedSocketCount(slots)
+    const socketLayout = shipSocketLayout(slots)
+    const layoutExtent = Math.max(46, ...socketLayout.map((socket) => Math.hypot(socket.x, socket.y)))
+    const scale = Math.min(compact ? 1.05 : 1.35, (compact ? 112 : 142) / layoutExtent)
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.strokeStyle = CYAN
@@ -1903,12 +1917,18 @@ export function createGame(
     ctx.font = '700 11px ui-monospace, monospace'
     ctx.fillText('CORE 2', cx, cy)
 
-    slots.forEach((part, index) => {
-      const socket = SOCKETS[index]
+    socketLayout.forEach((socket) => {
+      const index = socket.index
+      const part = slots[index]
       const sx = cx + socket.x * scale
       const sy = cy + socket.y * scale
-      const available = index < unlocked
+      const available = isSocketUnlocked(slots, index)
       const canAttach = available && !part && pendingSelected
+      const parent = socket.parentIndex === null
+        ? { x: cx, y: cy }
+        : socketLayout.find((candidate) => candidate.index === socket.parentIndex)
+      const startX = parent && 'index' in parent ? cx + parent.x * scale : cx
+      const startY = parent && 'index' in parent ? cy + parent.y * scale : cy
       const dismantleSelected = Boolean(part) && selectedMountedSlot === index
       ctx.strokeStyle = dismantleSelected ? RED : part ? partColor(part) : available ? `${CYAN}88` : '#2a3439'
       ctx.lineWidth = canAttach || dismantleSelected ? 2.5 : 1.2
@@ -1916,11 +1936,11 @@ export function createGame(
       ctx.beginPath()
       if (canAttach) {
         const jitter = Math.sin(performance.now() * 0.025 + index) * 7
-        ctx.moveTo(cx, cy)
-        ctx.lineTo((cx + sx) / 2 + jitter, (cy + sy) / 2 - jitter)
+        ctx.moveTo(startX, startY)
+        ctx.lineTo((startX + sx) / 2 + jitter, (startY + sy) / 2 - jitter)
         ctx.lineTo(sx, sy)
       } else {
-        ctx.moveTo(cx, cy)
+        ctx.moveTo(startX, startY)
         ctx.lineTo(sx, sy)
       }
       ctx.stroke()
@@ -1944,8 +1964,10 @@ export function createGame(
         })
       }
     })
-    const firstEmpty = slots.findIndex((part, index) => !part && index < unlocked)
-    const preview = firstEmpty < 0 ? calculatePower(2, slots) : calculatePower(2, slots.map((part, index) => index === firstEmpty ? previewPart : part))
+    const firstEmpty = firstOpenSocket(slots)
+    const previewSlots = [...slots]
+    if (firstEmpty >= 0) previewSlots[firstEmpty] = previewPart
+    const preview = calculatePower(2, previewSlots)
     ctx.textAlign = 'left'
     ctx.fillStyle = preview >= 10 ? AMBER : '#bcd1d9'
     ctx.font = '700 12px ui-monospace, monospace'
@@ -1978,12 +2000,19 @@ export function createGame(
     ]
     if (shopPage === 3) {
       const listTop = panel.y + 145
-      const listBottom = panel.y + panel.h - 72
       const rowGap = 4
-      const rowHeight = Math.min(50, (listBottom - listTop - rowGap * 5) / 6)
-      slots.forEach((part, index) => {
+      const allSockets = shipSocketLayout(slots)
+      const pageSize = 6
+      const pageCount = Math.max(1, Math.ceil(allSockets.length / pageSize))
+      const listBottom = panel.y + panel.h - (pageCount > 1 ? 116 : 72)
+      shopManagePage = Math.min(shopManagePage, pageCount - 1)
+      const visibleSockets = allSockets.slice(shopManagePage * pageSize, (shopManagePage + 1) * pageSize)
+      const rowHeight = Math.min(50, (listBottom - listTop - rowGap * (visibleSockets.length - 1)) / visibleSockets.length)
+      visibleSockets.forEach((socket, rowIndex) => {
+        const index = socket.index
+        const part = slots[index]
         const cardX = panel.x + 24
-        const cardY = listTop + index * (rowHeight + rowGap)
+        const cardY = listTop + rowIndex * (rowHeight + rowGap)
         const swapSelected = selectedSwapSlot === index
         glassPanel(cardX, cardY, panel.w - 48, rowHeight, 15, swapSelected ? AMBER : part ? partColor(part) : '#263b43')
         ctx.textAlign = 'left'
@@ -1991,7 +2020,7 @@ export function createGame(
         ctx.fillStyle = part ? partColor(part) : '#52636a'
         ctx.font = '700 12px ui-monospace, monospace'
         ctx.fillText(`SLOT ${index + 1}  ${part ? partLabel(part) : 'EMPTY'}${swapSelected ? '  // 교환 1/2' : ''}`, cardX + 12, cardY + 6)
-        if (index < unlockedSocketCount(slots)) {
+        if (isSocketUnlocked(slots, index)) {
           buttons.push({ x: cardX, y: cardY, w: panel.w - 48, h: rowHeight, action: () => selectSwapSlot(index) })
         }
         if (!part) return
@@ -2004,6 +2033,13 @@ export function createGame(
         const confirming = selectedMountedSlot === index
         addButton(panel.x + panel.w - 154, cardY + 6, 114, Math.max(28, rowHeight - 12), confirming ? `확정 +${value}` : `판매 +${value}`, () => sellMountedPart(index), confirming ? RED : AMBER)
       })
+      if (pageCount > 1) {
+        addButton(panel.x + panel.w / 2 - 62, panel.y + panel.h - 102, 124, 32, `소켓 ${shopManagePage + 1}/${pageCount} →`, () => {
+          shopManagePage = (shopManagePage + 1) % pageCount
+          selectedMountedSlot = null
+          selectedSwapSlot = null
+        }, CYAN)
+      }
     } else pages[shopPage].forEach(({ part, cost }, index) => {
       const preview = previewPart(slots, part, unlockedSocketCount(slots))
       const cardX = panel.x + 24
@@ -2024,11 +2060,13 @@ export function createGame(
     const nextLabels = ['무기 장비 →', '방어 장비 →', '장착 관리 →', '← 기본 장비']
     addButton(panel.x + panel.w - 150, panel.y + panel.h - 58, 126, 36, nextLabels[shopPage], () => {
       shopPage = (shopPage + 1) % 4
+      shopManagePage = 0
       selectedMountedSlot = null
       selectedSwapSlot = null
     }, AMBER)
     addButton(panel.x + 24, panel.y + panel.h - 58, 120, 36, '닫기', () => {
       phase = 'void'
+      shopManagePage = 0
       selectedMountedSlot = null
       selectedSwapSlot = null
       message = '상점 연결 종료'
@@ -2226,7 +2264,7 @@ function moduleLabel(kind: ModuleKind): string {
 }
 
 function unlockedSocketCount(slots: Array<ShipPart | null>): number {
-  return Math.min(6, 4 + slots.filter((part) => part?.kind === 'body').length)
+  return shipSocketLayout(slots).length
 }
 
 function operatorFormula(slots: Array<ShipPart | null>): string {
@@ -2268,7 +2306,7 @@ function defenseLabel(kind: DefenseKind): string {
 function partDescription(part: ShipPart): string {
   if (part.kind === 'add') return `누적 FIRE에 ${part.value} 추가`
   if (part.kind === 'multiply') return `앞에서 계산된 누적 FIRE를 ${part.value}배`
-  if (part.kind === 'body') return 'FIRE 변화 없음 · 장착 소켓 +1 · 질량 한도 +6'
+  if (part.kind === 'body') return '바깥 연결 소켓 +1 · 연속 확장 · 질량 한도 +6'
   if (part.kind === 'weapon') {
     if (part.weapon === 'homing') return '느린 주기 · 강한 유도 공격'
     if (part.weapon === 'mine') return '후방 설치 · 적이 살짝 회피'

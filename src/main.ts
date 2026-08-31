@@ -1,9 +1,8 @@
 import './style.css'
 import { createGame, type GameResult } from './game/game'
-import { partDurability, readSave, writeSave, type ShipPart } from './game/logic'
+import { firstOpenSocket, partDurability, readSave, writeSave, type ShipPart } from './game/logic'
 import { createScreenFlow, type FlowData } from './screens/flow'
 import { DEFAULT_SHOP_ITEMS, type ShopItem } from './screens/shop/pricing'
-import { unlockedSockets } from './screens/screen'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 
@@ -44,9 +43,8 @@ if (!menu || !shell || !canvas) {
 
 const storage = safeStorage()
 let save = readSave(storage)
-let slots: Array<ShipPart | null> = save.safeRun?.slots.slice(0, 6)
-  ?? [{ kind: 'add', value: 1, mass: 2 }, null, null, null, null, null]
-while (slots.length < 6) slots.push(null)
+let slots: Array<ShipPart | null> = save.safeRun?.slots.slice()
+  ?? [{ kind: 'add', value: 1, mass: 2 }, null, null, null]
 
 const flowData = (): FlowData => ({
   slots,
@@ -63,8 +61,7 @@ const showResult = (result: GameResult) => {
   game?.destroy()
   game = null
   save = readSave(storage)
-  slots = result.slots.slice(0, 6)
-  while (slots.length < 6) slots.push(null)
+  slots = result.slots.slice()
   shell.hidden = true
   menu.hidden = false
   flow.setData(flowData())
@@ -95,7 +92,7 @@ const startGame = (continueRun: boolean) => {
 }
 
 const purchase = (item: ShopItem) => {
-  const openSocket = slots.findIndex((slot, index) => !slot && index < unlockedSockets(slots))
+  const openSocket = firstOpenSocket(slots)
   if (openSocket < 0 || save.scrap < item.cost) return
 
   const savedIntegrity = save.safeRun?.slotIntegrity ?? []

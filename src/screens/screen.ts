@@ -1,4 +1,4 @@
-import type { DefenseKind, ShipPart, WeaponKind } from '../game/logic'
+import { shipSocketLayout, type DefenseKind, type ShipPart, type WeaponKind } from '../game/logic'
 
 /**
  * Every screen is a self-contained factory: it owns a detached root element,
@@ -59,7 +59,7 @@ function defenseLabel(kind: DefenseKind): string {
 
 /** Body parts open extra sockets; four are available before any are installed. */
 export function unlockedSockets(slots: ShipSlots): number {
-  return Math.min(6, 4 + slots.filter((part) => part?.kind === 'body').length)
+  return shipSocketLayout(slots).length
 }
 
 export function formatSigned(value: number): string {
