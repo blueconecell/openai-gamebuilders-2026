@@ -77,6 +77,9 @@ const CSS = `
 }
 
 .gb-panel {
+  display: grid;
+  gap: 10px;
+  align-content: start;
   border: 1px solid var(--gb-line);
   background: rgba(12, 20, 28, 0.82);
   padding: clamp(12px, 2.2vw, 18px);
@@ -113,10 +116,18 @@ const CSS = `
 .gb-stat dd.is-amber { color: var(--gb-amber); }
 .gb-stat dd.is-danger { color: var(--gb-danger); }
 
+/*
+ * On touch widths the primary actions stay pinned to the bottom, within thumb
+ * reach. On desktop that would leave a dead gap, so they follow the content.
+ */
 .gb-actions {
   display: grid;
   gap: 10px;
   margin-top: auto;
+}
+
+@media (min-width: 641px) {
+  .gb-actions { margin-top: 0; }
 }
 
 .gb-actions.is-split { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
