@@ -1601,6 +1601,7 @@ export function createGame(
   }
 
   const drawHud = () => {
+    const veryCompact = width < 360
     const power = calculatePower(2, slots)
     const mass = calculateMass(slots)
     const massLimit = calculateMassLimit(slots)
@@ -1609,11 +1610,11 @@ export function createGame(
     glassPanel(16, 16, hudWidth, 62, 20, '#2d5665')
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
-    ctx.font = '700 13px ui-monospace, monospace'
+    ctx.font = `700 ${veryCompact ? 11 : 13}px ui-monospace, monospace`
     ctx.fillStyle = CYAN
     ctx.fillText(`CORE ${Math.ceil(playerCore().hp / playerCore().maxHp * 100)}%`, 30, 27)
     ctx.fillStyle = power >= 10 ? AMBER : '#d9ffff'
-    ctx.fillText(`FIRE ${power}${power >= 10 ? '  // OVERFLOW' : ''}`, 130, 27)
+    ctx.fillText(`FIRE ${power}${power >= 10 ? '  // OVERFLOW' : ''}`, veryCompact ? 116 : 130, 27)
     ctx.textAlign = 'right'
     ctx.fillStyle = speed > CRUISE_SPEED * movementScale(mass, massLimit) ? AMBER : '#d9ffff'
     ctx.fillText(`SPD ${speed}`, 16 + hudWidth - 14, 27)
@@ -1621,7 +1622,7 @@ export function createGame(
     ctx.fillStyle = mass > massLimit ? RED : '#91a9b3'
     ctx.fillText(`MASS ${mass}/${massLimit}${mass > massLimit ? ' 과적' : ' 안정'}`, 30, 50)
     ctx.fillStyle = AMBER
-    ctx.fillText(`SCRAP ${save.scrap}`, 190, 50)
+    ctx.fillText(`SCRAP ${save.scrap}`, veryCompact ? 145 : 190, 50)
     ctx.textAlign = 'right'
     ctx.fillStyle = boostCooldown <= 0 ? AMBER : '#71858d'
     ctx.fillText(boostCooldown <= 0 ? 'BST READY' : `BST ${boostCooldown.toFixed(1)}s`, 16 + hudWidth - 14, 50)
@@ -1632,7 +1633,7 @@ export function createGame(
     ctx.fillStyle = '#bed0d7'
     ctx.font = '12px ui-monospace, monospace'
     ctx.fillText(message, 28, height - 37)
-    addButton(158, 45, 22, 22, '?', () => { massHelpOpen = !massHelpOpen }, mass > massLimit ? RED : '#71858d', '과적 디메리트 확인')
+    addButton(veryCompact ? 108 : 158, 45, 22, 22, '?', () => { massHelpOpen = !massHelpOpen }, mass > massLimit ? RED : '#71858d', '과적 디메리트 확인')
   }
 
   const drawOverflowStatus = () => {
@@ -1873,11 +1874,13 @@ export function createGame(
     }
   }
 
-  const drawPanel = (title: string, body: string[], panelHeight = 320) => {
+  const drawPanel = (title: string, body: string[], panelHeight = 320, mobileHudSafe = false) => {
     const w = Math.min(620, width - 32)
-    const h = Math.min(panelHeight, height - 100)
+    const safeTop = mobileHudSafe && width < 520 ? 86 : 0
+    const safeBottom = mobileHudSafe && width < 520 ? 64 : 50
+    const h = Math.min(panelHeight, height - safeTop - safeBottom)
     const x = (width - w) / 2
-    const y = (height - h) / 2
+    const y = mobileHudSafe && width < 520 ? safeTop : (height - h) / 2
     glassPanel(x, y, w, h, 26, '#426575')
     ctx.fillStyle = CYAN
     ctx.textAlign = 'left'
@@ -2089,14 +2092,15 @@ export function createGame(
   }
 
   const drawShop = () => {
+    const compact = width < 520
     const managing = shopPage === 3
     const panel = drawPanel(managing ? '함선 본체 정보' : '공백 상점', managing ? [
       `CORE 2 ${operatorFormula(slots)} = FIRE ${calculatePower(2, slots)}`,
-      '부품 탭 후 다른 소켓 탭: 이동 · 판매 버튼 두 번: 분해',
+      compact ? '이동: 소켓 2개 탭 · 분해: 판매 2번' : '부품 탭 후 다른 소켓 탭: 이동 · 판매 버튼 두 번: 분해',
     ] : [
       `보유 스크랩  ${save.scrap}`,
       '구매한 부품은 배송 캡슐로 즉시 워프합니다.',
-    ], 560)
+    ], 560, true)
     const pages: Array<Array<{ part: ShipPart; cost: number }>> = [
       [
         { part: TIMES_TWO, cost: 6 }, { part: BODY_PART, cost: 4 }, { part: HOMING_PART, cost: 8 },
@@ -2162,9 +2166,11 @@ export function createGame(
       ctx.fillText(partLabel(part), cardX + 12, cardY + 8)
       ctx.fillStyle = '#8fa5af'
       ctx.font = '10px ui-monospace, monospace'
-      ctx.fillText(partDescription(part), cardX + 12, cardY + 28)
+      ctx.fillText(compact ? compactPartDescription(part) : partDescription(part), cardX + 12, cardY + 28)
       ctx.fillStyle = preview.overloaded ? RED : '#b8cbd2'
-      ctx.fillText(`FIRE ${preview.fireBefore}→${preview.fireAfter} · MASS ${preview.massBefore}/${preview.massLimitBefore}→${preview.massAfter}/${preview.massLimitAfter} · ${preview.canAttach ? preview.overloaded ? '과적' : '안정' : '소켓 부족'}`, cardX + 12, cardY + 48)
+      ctx.fillText(compact
+        ? `FIRE ${preview.fireBefore}→${preview.fireAfter} · MASS ${preview.massAfter}/${preview.massLimitAfter} · ${preview.canAttach ? preview.overloaded ? '과적' : '안정' : '소켓 부족'}`
+        : `FIRE ${preview.fireBefore}→${preview.fireAfter} · MASS ${preview.massBefore}/${preview.massLimitBefore}→${preview.massAfter}/${preview.massLimitAfter} · ${preview.canAttach ? preview.overloaded ? '과적' : '안정' : '소켓 부족'}`, cardX + 12, cardY + 48)
       addButton(panel.x + panel.w - 130, cardY + 8, 90, 34, `${cost} SCRAP`, () => buyPart(part, cost), partColor(part))
     })
     const nextLabels = ['무기 장비 →', '방어 장비 →', '장착 관리 →', '← 기본 장비']
@@ -2427,6 +2433,15 @@ function partDescription(part: ShipPart): string {
   if (part.kind === 'defense' && part.defense === 'interceptor') return '주기적으로 근처 투사체 제거'
   if (part.kind === 'defense' && part.defense === 'shield') return '함선 전방으로 들어오는 공격 차단'
   return '주기적으로 수리봇이 모듈 내구도 회복'
+}
+
+function compactPartDescription(part: ShipPart): string {
+  if (part.kind === 'body') return '주변 소켓 +3 · 질량 한도 +6'
+  if (part.kind === 'multiply') return `누적 FIRE ${part.value}배`
+  if (part.kind === 'add') return `누적 FIRE +${part.value}`
+  if (part.kind === 'weapon') return `${weaponLabel(part.weapon)} 공격 모듈`
+  if (part.kind === 'defense') return `${defenseLabel(part.defense)} 방어 모듈`
+  return '증강 모듈'
 }
 
 function safeStorage(): Storage | undefined {

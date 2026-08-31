@@ -110,6 +110,7 @@ const CSS = `
 .gb-screen > * {
   position: relative;
   z-index: 1;
+  flex: 0 0 auto;
   width: 100%;
   max-width: 760px;
   margin-left: auto;
@@ -483,8 +484,72 @@ const CSS = `
 @keyframes gb-pulse { 50% { opacity: 0.25; } }
 
 @media (max-width: 640px) {
-  .gb-screen { gap: 12px; }
+  .gb-screen {
+    gap: 10px;
+    padding: max(12px, env(safe-area-inset-top)) 12px max(14px, env(safe-area-inset-bottom));
+    overscroll-behavior: contain;
+  }
   .gb-ship { justify-content: center; }
+
+  .gb-shop > header {
+    position: sticky;
+    z-index: 4;
+    top: -12px;
+    padding: 12px 2px 9px;
+    background: linear-gradient(180deg, rgba(4, 7, 12, 0.98) 72%, rgba(4, 7, 12, 0));
+    backdrop-filter: blur(10px);
+  }
+
+  .gb-shop .gb-heading { font-size: 24px; }
+
+  .gb-shop > .gb-note {
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .gb-good {
+    gap: 8px;
+    padding: 13px;
+    border-radius: 19px;
+  }
+
+  .gb-good.is-locked { opacity: 0.72; }
+
+  .gb-good h3 { font-size: 17px; }
+  .gb-cost { font-size: 12px; }
+  .gb-good .gb-note { font-size: 11px; line-height: 1.45; }
+
+  .gb-delta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 10px;
+    padding-top: 9px;
+    font-size: 11px;
+  }
+
+  .gb-delta > span {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+  }
+
+  .gb-delta b {
+    display: block;
+    overflow-wrap: anywhere;
+  }
+
+  .gb-good .gb-button {
+    min-height: 44px;
+    padding: 9px 14px;
+  }
+
+  .gb-shop > .gb-actions {
+    position: sticky;
+    z-index: 4;
+    bottom: calc(-1 * max(14px, env(safe-area-inset-bottom)));
+    padding: 9px 0 max(14px, env(safe-area-inset-bottom));
+    background: linear-gradient(0deg, rgba(4, 7, 12, 0.98) 72%, rgba(4, 7, 12, 0));
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
