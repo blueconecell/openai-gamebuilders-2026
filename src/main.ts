@@ -20,9 +20,9 @@ app.innerHTML = `
       <canvas id="game" width="1280" height="720" tabindex="0" aria-label="OVERFLOW FAR SPACE 플레이 화면"></canvas>
     </section>
     <footer class="control-strip" aria-label="조작 안내">
-      <p><kbd>WASD</kbd><span>또는 드래그로 이동</span></p>
-      <p><kbd>CLICK</kbd><span>적 부품 집중 조준</span></p>
-      <p class="route"><b>탐색</b><i></i><b>해체</b><i></i><b>조립</b><i></i><b>돌파</b></p>
+      <p><kbd>WASD</kbd><span>또는 드래그로 조향</span></p>
+      <p><kbd>AUTO</kbd><span>함선 전방으로 자동 사격</span></p>
+      <p class="route"><b>감지</b><i></i><b>접근</b><i></i><b>해체</b><i></i><b>조립</b></p>
     </footer>
   </main>
 `

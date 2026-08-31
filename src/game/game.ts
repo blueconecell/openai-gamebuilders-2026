@@ -24,6 +24,7 @@ type Phase =
 type Point = { x: number; y: number }
 type Button = { x: number; y: number; w: number; h: number; action: () => void }
 type ModuleKind = 'guard' | 'gun' | 'core'
+type Zone = { x: number; y: number; radius: number; label: string; risk: string }
 type EnemyModule = {
   id: string
   kind: ModuleKind
@@ -31,8 +32,9 @@ type EnemyModule = {
   hp: number
   maxHp: number
 }
-type Bullet = { x: number; y: number; targetId: string; speed: number; damage: number }
+type Bullet = { x: number; y: number; vx: number; vy: number; damage: number; life: number }
 type EnemyBullet = { x: number; y: number; vx: number; vy: number; damage: number; life: number }
+type PlayerModule = { id: 'armor-top' | 'armor-bottom' | 'core'; kind: 'armor' | 'core'; offset: Point; hp: number; maxHp: number }
 type Stick = { pointerId: number; originX: number; originY: number; x: number; y: number }
 
 const ADD_ONE: OperatorPart = { kind: 'add', value: 1, mass: 2 }
@@ -43,8 +45,11 @@ const AMBER = '#ffbd59'
 const RED = '#ff5268'
 const INK = '#071016'
 const WORLD = { w: 4200, h: 4200 }
-const HULL_RADIUS = 24
 const STICK_RADIUS = 62
+const ZOOM = 0.72
+const SENSOR_RANGE = 920
+const UNKNOWN_ZONE: Zone = { x: 2920, y: 1900, radius: 155, label: 'UNKNOWN // WARDEN', risk: '■■■□□' }
+const BOSS_ZONE: Zone = { x: 3580, y: 820, radius: 190, label: 'MAIN // LIMIT BREAKER', risk: '■■■■■' }
 
 export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const ctx = canvas.getContext('2d')
@@ -64,24 +69,25 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   let player = {
     x: WORLD.w * (restoredRun?.xRatio ?? 0.5),
     y: WORLD.h * (restoredRun?.yRatio ?? 0.5),
-    hp: 100,
   }
+  let playerModules = createPlayerModules()
   let heading = -Math.PI / 2
   let thrust = 0
   let enemy: { x: number; y: number; name: string; modules: EnemyModule[] } | null = null
-  let targetId = ''
   let bullets: Bullet[] = []
   let enemyBullets: EnemyBullet[] = []
   let fireTimer = 0
   let enemyAttackTimer = 1.2
   let explored = restoredRun?.explored ?? 0
+  let unknownDiscovered = explored > 0
+  let unknownResolved = explored >= 100
   let idleTime = 4
   let cloaked = true
   let stick: Stick | null = null
   let deliveryTimer = 0
   let overflowPulse = 0
   let flash = 0
-  let message = '이동하여 미지 신호를 탐색하세요'
+  let message = '자유 항해 중 · 센서 범위에서 미지 구역을 찾으세요'
   let buttons: Button[] = []
   let frame = 0
   let lastTime = performance.now()
@@ -114,12 +120,11 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   }
 
   // The ship stays locked to the middle of the screen; the world scrolls past it.
-  const screenToWorld = (point: Point): Point => ({
-    x: point.x - width / 2 + player.x,
-    y: point.y - height / 2 + player.y,
-  })
-
-  const applyCamera = () => ctx.translate(width / 2 - player.x, height / 2 - player.y)
+  const applyCamera = () => {
+    ctx.translate(width / 2, height / 2)
+    ctx.scale(ZOOM, ZOOM)
+    ctx.translate(-player.x, -player.y)
+  }
 
   const modulePosition = (part: EnemyModule): Point => ({
     x: (enemy?.x ?? 0) + part.offset.x,
@@ -130,20 +135,12 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     .filter((part) => part.kind === 'guard')
     .every((part) => part.hp <= 0))
 
-  const validTarget = (): EnemyModule | null => {
-    if (!enemy) return null
-    const selected = enemy.modules.find((part) => part.id === targetId && part.hp > 0)
-    if (selected && (selected.kind !== 'core' || coreExposed())) return selected
-    return enemy.modules.find((part) => part.kind === 'guard' && part.hp > 0)
-      ?? enemy.modules.find((part) => part.kind === 'gun' && part.hp > 0)
-      ?? enemy.modules.find((part) => part.kind === 'core' && part.hp > 0 && coreExposed())
-      ?? null
-  }
+  const playerCore = () => playerModules.find((part) => part.kind === 'core')!
 
   const beginElite = () => {
     phase = 'elite'
     cloaked = false
-    player.hp = 100
+    playerModules = createPlayerModules()
     heading = 0
     enemy = {
       x: player.x + 430,
@@ -155,7 +152,6 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
         { id: 'elite-core', kind: 'core', offset: { x: 12, y: 0 }, hp: 320, maxHp: 320 },
       ],
     }
-    targetId = 'elite-guard'
     bullets = []
     enemyBullets = []
     enemyAttackTimer = 1.1
@@ -165,7 +161,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const beginBoss = () => {
     phase = 'boss'
     cloaked = false
-    player.hp = 100
+    playerModules = createPlayerModules()
     heading = 0
     enemy = {
       x: player.x + 460,
@@ -178,7 +174,6 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
         { id: 'boss-core', kind: 'core', offset: { x: 15, y: 0 }, hp: 430, maxHp: 430 },
       ],
     }
-    targetId = 'boss-guard-a'
     bullets = []
     enemyBullets = []
     enemyAttackTimer = 0.9
@@ -208,28 +203,41 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     phase = 'void'
     slots = [ADD_ONE, null, null, null]
     pendingPart = null
-    player = { x: WORLD.w * 0.5, y: WORLD.h * 0.5, hp: 100 }
+    player = { x: WORLD.w * 0.5, y: WORLD.h * 0.5 }
+    playerModules = createPlayerModules()
     heading = -Math.PI / 2
     enemy = null
-    targetId = ''
     bullets = []
     enemyBullets = []
     explored = 0
+    unknownDiscovered = false
+    unknownResolved = false
     idleTime = 4
     cloaked = true
     stick = null
     save.safeRun = null
     persist()
-    message = '이동하여 미지 신호를 탐색하세요'
+    message = '자유 항해 중 · 센서 범위에서 미지 구역을 찾으세요'
   }
 
   const enterVoidAfterReward = () => {
     phase = 'void'
     explored = 100
+    unknownResolved = true
     idleTime = 4
     cloaked = true
     persistSafeRun()
     message = '클로킹 완료 · 공백 상점을 이용하세요'
+  }
+
+  const warpNearBoss = () => {
+    player.x = BOSS_ZONE.x - 760
+    player.y = BOSS_ZONE.y + 180
+    heading = -0.22
+    idleTime = 0
+    cloaked = false
+    phase = 'void'
+    message = '워프 완료 · 메인 신호까지 직접 접근하세요'
   }
 
   const selectSocket = (index: number) => {
@@ -273,26 +281,6 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     && point.y >= button.y
     && point.y <= button.y + button.h
 
-  const selectEnemyModule = (point: Point): boolean => {
-    if (!enemy || (phase !== 'elite' && phase !== 'boss')) return false
-    const world = screenToWorld(point)
-    const selected = enemy.modules
-      .filter((part) => part.hp > 0)
-      .find((part) => {
-        const pos = modulePosition(part)
-        return Math.hypot(world.x - pos.x, world.y - pos.y) < 38
-      })
-    if (!selected) return false
-    if (selected.kind === 'core' && !coreExposed()) {
-      message = '코어 잠금 · 보호 모듈을 먼저 파괴하세요'
-      flash = 0.25
-      return true
-    }
-    targetId = selected.id
-    message = `${moduleLabel(selected.kind)} 집중 조준`
-    return true
-  }
-
   // Touch drives a floating stick in the lower-left; a mouse never steers the ship.
   const inStickZone = (point: Point) => point.x < width * 0.5 && point.y > height * 0.45
 
@@ -309,7 +297,6 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       canvas.setPointerCapture?.(event.pointerId)
       return
     }
-    selectEnemyModule(point)
   }
 
   const onPointerMove = (event: PointerEvent) => {
@@ -389,61 +376,74 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       player.y = clamp(player.y + movement.y * speed * dt, 60, WORLD.h - 60)
       idleTime = 0
       cloaked = false
-      if (phase === 'void' && explored < 100) {
-        explored += speed * throttle * dt * 0.28
-        if (explored >= 100) {
-          explored = 100
-          phase = 'signal'
-          save.discoveries += 1
-          persist()
-          stick = null
-          message = '미지 신호가 항로에 나타났습니다'
-        }
-      }
     } else if (phase === 'void') {
       const wasCloaked = cloaked
       idleTime += dt
       cloaked = idleTime >= 3
       if (!wasCloaked && cloaked) persistSafeRun()
     }
+
+    if (phase !== 'void') return
+    const unknownDistance = distanceTo(UNKNOWN_ZONE, player)
+    if (!unknownResolved && unknownDistance <= SENSOR_RANGE && !unknownDiscovered) {
+      unknownDiscovered = true
+      explored = 1
+      save.discoveries += 1
+      persist()
+      message = '미지 구역 감지 · 접근하거나 항로를 유지하세요'
+    }
+    if (!unknownResolved && unknownDistance <= UNKNOWN_ZONE.radius) {
+      phase = 'signal'
+      stick = null
+      message = '미지 구역 경계 · 진입 여부를 선택하세요'
+      return
+    }
+    const bossAvailable = slots.some((part) => part?.kind === 'multiply')
+    if (bossAvailable && distanceTo(BOSS_ZONE, player) <= BOSS_ZONE.radius) {
+      phase = 'bossIntro'
+      stick = null
+      message = '메인 퀘스트 구역 경계'
+    }
   }
 
   const updateCombat = (dt: number) => {
     updateMovement(dt)
-    const target = validTarget()
-    if (!enemy || !target) return
-    targetId = target.id
+    if (!enemy) return
     fireTimer -= dt
     if (fireTimer <= 0) {
       bullets.push({
         x: player.x + Math.cos(heading) * 26,
         y: player.y + Math.sin(heading) * 26,
-        targetId: target.id,
-        speed: 520,
+        vx: Math.cos(heading) * 560,
+        vy: Math.sin(heading) * 560,
         damage: calculatePower(2, slots),
+        life: 1.7,
       })
       fireTimer = 0.22
     }
 
     bullets = bullets.filter((bullet) => {
-      const part = enemy?.modules.find((item) => item.id === bullet.targetId)
-      if (!part || part.hp <= 0) return false
-      const pos = modulePosition(part)
-      const dx = pos.x - bullet.x
-      const dy = pos.y - bullet.y
-      const distance = Math.hypot(dx, dy)
-      if (distance < bullet.speed * dt + 12) {
-        if (part.kind !== 'core' || coreExposed()) part.hp = Math.max(0, part.hp - bullet.damage)
+      bullet.x += bullet.vx * dt
+      bullet.y += bullet.vy * dt
+      bullet.life -= dt
+      if (bullet.life <= 0 || !enemy) return false
+      const part = enemy.modules.find((item) => {
+        if (item.hp <= 0) return false
+        const pos = modulePosition(item)
+        return Math.hypot(pos.x - bullet.x, pos.y - bullet.y) <= (item.kind === 'core' ? 27 : 30)
+      })
+      if (part) {
+        const locked = part.kind === 'core' && !coreExposed()
+        if (!locked) part.hp = Math.max(0, part.hp - bullet.damage)
+        else message = '코어 차폐됨 · 전방 보호 부품을 노리세요'
         if (part.hp <= 0) {
           flash = 0.18
           if (part.kind === 'core') finishCombat()
-          else if (part.kind === 'guard' && coreExposed()) message = '코어 노출! 코어를 탭해 집중 조준하세요'
+          else if (part.kind === 'guard' && coreExposed()) message = '코어 노출! 함선 각도를 맞춰 전방 사격하세요'
           else message = `${moduleLabel(part.kind)} 파괴`
         }
         return false
       }
-      bullet.x += dx / distance * bullet.speed * dt
-      bullet.y += dy / distance * bullet.speed * dt
       return true
     })
 
@@ -473,16 +473,21 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
         : (phase === 'boss' ? 2.8 : 3.4)
     }
 
-    const hitRadius = HULL_RADIUS + calculateMass(slots) * 0.5
     enemyBullets = enemyBullets.filter((shot) => {
       shot.x += shot.vx * dt
       shot.y += shot.vy * dt
       shot.life -= dt
       if (shot.life <= 0) return false
-      if (Math.hypot(player.x - shot.x, player.y - shot.y) > hitRadius) return true
-      player.hp = Math.max(0, player.hp - shot.damage)
+      const hit = playerModules.find((part) => {
+        if (part.hp <= 0) return false
+        const pos = playerModulePosition(part, player, heading)
+        return Math.hypot(pos.x - shot.x, pos.y - shot.y) <= (part.kind === 'core' ? 12 : 15)
+      })
+      if (!hit) return true
+      hit.hp = Math.max(0, hit.hp - shot.damage)
       flash = 0.25
-      if (player.hp <= 0) {
+      if (hit.kind === 'armor' && hit.hp <= 0) message = '외부 장갑 파괴 · 핵심 코어 노출 위험'
+      if (playerCore().hp <= 0) {
         phase = 'defeat'
         enemy = null
         bullets = []
@@ -586,6 +591,16 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
         ctx.fill()
         ctx.fillStyle = '#0d222b'
       }
+    }
+
+    // Separate armor blocks can be shot away while the single core remains the loss condition.
+    for (const part of playerModules) {
+      if (part.kind !== 'armor' || part.hp <= 0) continue
+      ctx.fillStyle = '#102a33'
+      ctx.strokeStyle = part.hp / part.maxHp > 0.35 ? '#78aeb8' : RED
+      ctx.lineWidth = 1.5
+      ctx.fillRect(part.offset.x - 13, part.offset.y - 10, 26, 20)
+      ctx.strokeRect(part.offset.x - 13, part.offset.y - 10, 26, 20)
     }
 
     // Empty socket brackets make the expandable frame legible from the first frame.
@@ -715,15 +730,14 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     for (const part of enemy.modules) {
       if (part.hp <= 0) continue
       const pos = modulePosition(part)
-      const selected = part.id === targetId
       const locked = part.kind === 'core' && !exposed
       ctx.save()
       ctx.translate(pos.x, pos.y)
-      ctx.strokeStyle = selected ? AMBER : part.kind === 'core' ? RED : '#91acb8'
+      ctx.strokeStyle = part.kind === 'core' ? RED : '#91acb8'
       ctx.fillStyle = locked ? '#171c20' : part.kind === 'core' ? '#33121a' : '#0a171d'
-      ctx.lineWidth = selected ? 3 : 1.5
+      ctx.lineWidth = 1.5
       ctx.shadowColor = ctx.strokeStyle
-      ctx.shadowBlur = selected ? 14 : 5
+      ctx.shadowBlur = 5
       if (part.kind === 'guard') {
         ctx.fillRect(-27, -21, 54, 42)
         ctx.strokeRect(-27, -21, 54, 42)
@@ -791,7 +805,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.textBaseline = 'top'
     ctx.font = '700 13px ui-monospace, monospace'
     ctx.fillStyle = CYAN
-    ctx.fillText(`CORE ${Math.ceil(player.hp)}%`, 30, 27)
+    ctx.fillText(`CORE ${Math.ceil(playerCore().hp)}%`, 30, 27)
     ctx.fillStyle = power >= 10 ? AMBER : '#d9ffff'
     ctx.fillText(`FIRE ${power}${power >= 10 ? '  // OVERFLOW' : ''}`, 130, 27)
     ctx.fillStyle = mass > 6 ? RED : '#91a9b3'
@@ -806,20 +820,72 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.fillText(message, 28, height - 37)
   }
 
-  const drawVoidUi = () => {
-    if (explored < 100) {
-      const barWidth = Math.min(440, width - 60)
-      const x = (width - barWidth) / 2
-      const y = height * 0.17
-      ctx.fillStyle = '#101b21'
-      ctx.fillRect(x, y, barWidth, 8)
-      ctx.fillStyle = CYAN
-      ctx.fillRect(x, y, barWidth * explored / 100, 8)
-      ctx.fillStyle = '#9bb1bb'
-      ctx.textAlign = 'center'
-      ctx.font = '11px ui-monospace, monospace'
-      ctx.fillText('UNKNOWN SIGNAL SCAN', width / 2, y - 19)
+  const drawWorldZones = () => {
+    const contacts: Array<{ zone: Zone; color: string }> = []
+    if (!unknownResolved && distanceTo(UNKNOWN_ZONE, player) <= SENSOR_RANGE) {
+      contacts.push({ zone: UNKNOWN_ZONE, color: CYAN })
     }
+    if (slots.some((part) => part?.kind === 'multiply') && distanceTo(BOSS_ZONE, player) <= SENSOR_RANGE) {
+      contacts.push({ zone: BOSS_ZONE, color: AMBER })
+    }
+    for (const { zone, color } of contacts) {
+      ctx.save()
+      ctx.translate(zone.x, zone.y)
+      ctx.strokeStyle = `${color}88`
+      ctx.lineWidth = 2
+      ctx.setLineDash([14, 12])
+      ctx.beginPath()
+      ctx.arc(0, 0, zone.radius, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = `${color}12`
+      ctx.beginPath()
+      ctx.arc(0, 0, zone.radius, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = color
+      ctx.font = '700 12px ui-monospace, monospace'
+      ctx.textAlign = 'center'
+      ctx.fillText(zone.label, 0, -zone.radius - 18)
+      ctx.restore()
+    }
+  }
+
+  const drawSensorHud = () => {
+    const contacts: Array<{ zone: Zone; color: string }> = []
+    if (!unknownResolved && distanceTo(UNKNOWN_ZONE, player) <= SENSOR_RANGE) contacts.push({ zone: UNKNOWN_ZONE, color: CYAN })
+    if (slots.some((part) => part?.kind === 'multiply') && distanceTo(BOSS_ZONE, player) <= SENSOR_RANGE) {
+      contacts.push({ zone: BOSS_ZONE, color: AMBER })
+    }
+    contacts.forEach(({ zone, color }) => {
+      const dx = zone.x - player.x
+      const dy = zone.y - player.y
+      const angle = Math.atan2(dy, dx)
+      const distance = Math.round(Math.hypot(dx, dy))
+      const edgeX = clamp(width / 2 + Math.cos(angle) * width * 0.38, 54, width - 54)
+      const edgeY = clamp(height / 2 + Math.sin(angle) * height * 0.34, 100, height - 82)
+      ctx.save()
+      ctx.translate(edgeX, edgeY)
+      ctx.rotate(angle)
+      ctx.fillStyle = color
+      ctx.beginPath()
+      ctx.moveTo(15, 0)
+      ctx.lineTo(-9, -8)
+      ctx.lineTo(-9, 8)
+      ctx.closePath()
+      ctx.fill()
+      ctx.restore()
+      ctx.fillStyle = color
+      ctx.font = '700 10px ui-monospace, monospace'
+      ctx.textAlign = edgeX < width / 2 ? 'left' : 'right'
+      ctx.fillText(`${zone === BOSS_ZONE ? 'MAIN' : 'SIGNAL'} ${distance}m`, edgeX + (edgeX < width / 2 ? 18 : -18), edgeY - 4)
+    })
+  }
+
+  const drawVoidUi = () => {
+    ctx.fillStyle = '#78909a'
+    ctx.textAlign = 'center'
+    ctx.font = '11px ui-monospace, monospace'
+    ctx.fillText(`SENSOR ${SENSOR_RANGE}m // 자유 항해`, width / 2, 104)
     if (cloaked) {
       ctx.textAlign = 'center'
       ctx.fillStyle = CYAN
@@ -828,12 +894,11 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       ctx.fillStyle = '#8198a2'
       ctx.font = '12px ui-monospace, monospace'
       ctx.fillText('정지 상태 · 안전 저장됨', width / 2, height * 0.3 + 26)
-    }
-    if (explored >= 100) {
       const w = Math.min(260, width - 40)
-      addButton((width - w) / 2, height * 0.26, w, 52, '공백 상점 열기', () => { phase = 'shop' })
+      const x = width - w - 22
+      addButton(x, height - 126, w, 44, '공백 상점 열기', () => { phase = 'shop' })
       if (slots.some((part) => part?.kind === 'multiply')) {
-        addButton((width - w) / 2, height * 0.26 + 66, w, 58, '메인 신호로 워프', () => { phase = 'bossIntro' }, AMBER)
+        addButton(x, height - 180, w, 44, '메인 신호 근처로 워프', warpNearBoss, AMBER)
       }
     }
   }
@@ -872,8 +937,10 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     addButton(panel.x + 24, panel.y + panel.h - 74, buttonWidth, 50, '진입', beginElite, AMBER)
     addButton(panel.x + 24 + buttonWidth + gap, panel.y + panel.h - 74, buttonWidth, 50, '지나가기', () => {
       phase = 'void'
-      explored = 42
-      message = '신호를 통과했습니다 · 새 항로 탐색 중'
+      explored = 100
+      unknownResolved = true
+      persistSafeRun()
+      message = '미지 구역을 지나쳤습니다 · 자유 항해 복귀'
     }, '#8aa0aa')
   }
 
@@ -982,11 +1049,11 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   }
 
   const drawBossIntro = () => {
-    const panel = drawPanel('메인 퀘스트 구역', [
-      '강한 LIMIT 신호가 바로 앞에 있습니다.',
+    const panel = drawPanel('메인 퀘스트 경계', [
+      '워프는 감지 범위 밖에 도착했습니다. 직접 접근 완료.',
       '보호 모듈 2개를 제거한 뒤 핵심 코어를 파괴하세요.',
     ], 300)
-    addButton(panel.x + 24, panel.y + panel.h - 74, panel.w - 48, 50, '워프 개시', beginBoss, AMBER)
+    addButton(panel.x + 24, panel.y + panel.h - 74, panel.w - 48, 50, '보스 구역 진입', beginBoss, AMBER)
   }
 
   const drawEnd = (won: boolean) => {
@@ -1003,6 +1070,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.save()
     applyCamera()
     if (!['signal', 'reward', 'shop', 'assembly', 'bossIntro', 'victory', 'defeat'].includes(phase)) {
+      if (phase === 'void') drawWorldZones()
       drawPlayer()
     }
     if (phase === 'elite' || phase === 'boss') {
@@ -1018,6 +1086,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     }
     ctx.restore()
     drawStick()
+    if (phase === 'void') drawSensorHud()
     if (phase === 'void') drawVoidUi()
     if (phase === 'signal') drawSignal()
     if (phase === 'reward') drawReward()
@@ -1069,6 +1138,27 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
+}
+
+function distanceTo(a: Point, b: Point): number {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+function createPlayerModules(): PlayerModule[] {
+  return [
+    { id: 'armor-top', kind: 'armor', offset: { x: 2, y: -21 }, hp: 42, maxHp: 42 },
+    { id: 'armor-bottom', kind: 'armor', offset: { x: 2, y: 21 }, hp: 42, maxHp: 42 },
+    { id: 'core', kind: 'core', offset: { x: 0, y: 0 }, hp: 100, maxHp: 100 },
+  ]
+}
+
+function playerModulePosition(part: PlayerModule, player: Point, heading: number): Point {
+  const cos = Math.cos(heading)
+  const sin = Math.sin(heading)
+  return {
+    x: player.x + part.offset.x * cos - part.offset.y * sin,
+    y: player.y + part.offset.x * sin + part.offset.y * cos,
+  }
 }
 
 // Rotates along the short arc so the hull never spins the long way round.
