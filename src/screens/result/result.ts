@@ -1,4 +1,13 @@
-import { createHelp, delegateClicks, element, type ScreenHandle } from '../screen'
+import type { ShipPart } from '../../game/logic'
+import {
+  createHelp,
+  delegateClicks,
+  element,
+  partColor,
+  partKindLabel,
+  partLabel,
+  type ScreenHandle,
+} from '../screen'
 import { ensureScreenStyles } from '../styles'
 
 export type ResultProps = {
@@ -11,6 +20,8 @@ export type ResultProps = {
   /** Enemy or boss names destroyed during the exploration, in kill order. */
   defeated: string[]
   discoveries: number
+  /** Parts recovered during this exploration, in pickup order. */
+  gained?: ShipPart[]
   /** Overrides the built-in explainer copy. */
   help?: string[]
   onNewRun(): void
@@ -69,7 +80,9 @@ export function createResultScreen(props: ResultProps): ScreenHandle<ResultProps
     )
 
     const help = current.help ?? (won ? VICTORY_HELP : DEFEAT_HELP)
-    el.append(verdict, stats, killPanel(current.defeated), createHelp('결과 읽는 법', help), actions)
+    el.append(verdict, stats)
+    if (current.gained?.length) el.appendChild(gainedPanel(current.gained))
+    el.append(killPanel(current.defeated), createHelp('결과 읽는 법', help), actions)
   }
 
   render()
@@ -85,6 +98,25 @@ export function createResultScreen(props: ResultProps): ScreenHandle<ResultProps
       el.remove()
     },
   }
+}
+
+/** Recovered parts, so the pilot sees what the exploration actually paid out. */
+function gainedPanel(gained: ShipPart[]): HTMLElement {
+  const panel = element('div', 'gb-panel')
+  const title = element('p', 'gb-eyebrow')
+  title.textContent = '회수한 부품'
+  panel.appendChild(title)
+
+  const list = element('div', 'gb-gained')
+  for (const part of gained) {
+    const chip = element('span', 'gb-chip')
+    chip.style.color = partColor(part)
+    chip.style.borderColor = partColor(part)
+    chip.textContent = `${partKindLabel(part)} · ${partLabel(part)}`
+    list.appendChild(chip)
+  }
+  panel.appendChild(list)
+  return panel
 }
 
 function killPanel(defeated: string[]): HTMLElement {

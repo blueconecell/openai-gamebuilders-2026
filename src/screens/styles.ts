@@ -395,6 +395,16 @@ const CSS = `
 .gb-verdict.is-win h2 { color: var(--gb-amber); text-shadow: 0 0 26px rgba(255, 184, 74, 0.45); }
 .gb-verdict.is-loss h2 { color: var(--gb-danger); text-shadow: 0 0 26px rgba(255, 92, 108, 0.4); }
 
+.gb-gained { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.gb-chip {
+  border: 1px solid currentColor;
+  padding: 5px 10px;
+  font-family: var(--gb-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
 .gb-kills { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; }
 
 .gb-kills li {
