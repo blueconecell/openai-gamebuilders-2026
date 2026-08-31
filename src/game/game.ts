@@ -32,6 +32,7 @@ type EnemyModule = {
   hp: number
   maxHp: number
 }
+type EnemyShip = { x: number; y: number; heading: number; name: string; modules: EnemyModule[] }
 type Bullet = { x: number; y: number; vx: number; vy: number; damage: number; life: number }
 type EnemyBullet = { x: number; y: number; vx: number; vy: number; damage: number; life: number }
 type PlayerModule = { id: 'armor-top' | 'armor-bottom' | 'core'; kind: 'armor' | 'core'; offset: Point; hp: number; maxHp: number }
@@ -73,7 +74,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   let playerModules = createPlayerModules()
   let heading = -Math.PI / 2
   let thrust = 0
-  let enemy: { x: number; y: number; name: string; modules: EnemyModule[] } | null = null
+  let enemy: EnemyShip | null = null
   let bullets: Bullet[] = []
   let enemyBullets: EnemyBullet[] = []
   let fireTimer = 0
@@ -127,8 +128,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   }
 
   const modulePosition = (part: EnemyModule): Point => ({
-    x: (enemy?.x ?? 0) + part.offset.x,
-    y: (enemy?.y ?? 0) + part.offset.y,
+    x: (enemy?.x ?? 0) + part.offset.x * Math.cos(enemy?.heading ?? 0) - part.offset.y * Math.sin(enemy?.heading ?? 0),
+    y: (enemy?.y ?? 0) + part.offset.x * Math.sin(enemy?.heading ?? 0) + part.offset.y * Math.cos(enemy?.heading ?? 0),
   })
 
   const coreExposed = () => Boolean(enemy && enemy.modules
@@ -145,11 +146,12 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     enemy = {
       x: player.x + 430,
       y: player.y - 20,
+      heading: Math.PI,
       name: '미지 정예기체 // WARDEN',
       modules: [
-        { id: 'elite-guard', kind: 'guard', offset: { x: -62, y: 0 }, hp: 160, maxHp: 160 },
-        { id: 'elite-gun', kind: 'gun', offset: { x: 12, y: -54 }, hp: 100, maxHp: 100 },
-        { id: 'elite-core', kind: 'core', offset: { x: 12, y: 0 }, hp: 320, maxHp: 320 },
+        { id: 'elite-guard', kind: 'guard', offset: { x: 0, y: -52 }, hp: 36, maxHp: 36 },
+        { id: 'elite-gun', kind: 'gun', offset: { x: 58, y: 0 }, hp: 28, maxHp: 28 },
+        { id: 'elite-core', kind: 'core', offset: { x: 0, y: 0 }, hp: 68, maxHp: 68 },
       ],
     }
     bullets = []
@@ -166,12 +168,13 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     enemy = {
       x: player.x + 460,
       y: player.y - 20,
+      heading: Math.PI,
       name: 'MAIN SIGNAL // LIMIT BREAKER',
       modules: [
-        { id: 'boss-guard-a', kind: 'guard', offset: { x: -72, y: -45 }, hp: 150, maxHp: 150 },
-        { id: 'boss-guard-b', kind: 'guard', offset: { x: -72, y: 45 }, hp: 150, maxHp: 150 },
-        { id: 'boss-gun', kind: 'gun', offset: { x: 18, y: -68 }, hp: 140, maxHp: 140 },
-        { id: 'boss-core', kind: 'core', offset: { x: 15, y: 0 }, hp: 430, maxHp: 430 },
+        { id: 'boss-guard-a', kind: 'guard', offset: { x: 0, y: -58 }, hp: 42, maxHp: 42 },
+        { id: 'boss-guard-b', kind: 'guard', offset: { x: 0, y: 58 }, hp: 42, maxHp: 42 },
+        { id: 'boss-gun', kind: 'gun', offset: { x: 64, y: 0 }, hp: 36, maxHp: 36 },
+        { id: 'boss-core', kind: 'core', offset: { x: 0, y: 0 }, hp: 110, maxHp: 110 },
       ],
     }
     bullets = []
@@ -371,7 +374,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     if (moving) {
       // Only the hull turns — rotating the camera makes the void nauseating to read.
       heading = turnToward(heading, Math.atan2(movement.y, movement.x), dt * 7)
-      const speed = 190 * movementScale(calculateMass(slots))
+      const speed = 118 * movementScale(calculateMass(slots))
       player.x = clamp(player.x + movement.x * speed * dt, 60, WORLD.w - 60)
       player.y = clamp(player.y + movement.y * speed * dt, 60, WORLD.h - 60)
       idleTime = 0
@@ -409,6 +412,14 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const updateCombat = (dt: number) => {
     updateMovement(dt)
     if (!enemy) return
+    const chaseAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x)
+    enemy.heading = turnToward(enemy.heading, chaseAngle, dt * 1.25)
+    const chaseDistance = Math.hypot(player.x - enemy.x, player.y - enemy.y)
+    if (chaseDistance > 215) {
+      const chaseSpeed = phase === 'boss' ? 22 : 27
+      enemy.x += Math.cos(enemy.heading) * chaseSpeed * dt
+      enemy.y += Math.sin(enemy.heading) * chaseSpeed * dt
+    }
     fireTimer -= dt
     if (fireTimer <= 0) {
       bullets.push({
@@ -454,15 +465,14 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       const origins = guns.length ? guns.map(modulePosition) : [{ x: enemy.x, y: enemy.y }]
       const spread = phase === 'boss' ? 0.16 : 0
       const shotSpeed = phase === 'boss' ? 330 : 290
-      const damage = phase === 'boss' ? 14 : 11
+      const damage = phase === 'boss' ? 12 : 9
       for (const origin of origins) {
-        const aim = Math.atan2(player.y - origin.y, player.x - origin.x)
         for (const offset of spread ? [-spread, 0, spread] : [0]) {
           enemyBullets.push({
             x: origin.x,
             y: origin.y,
-            vx: Math.cos(aim + offset) * shotSpeed,
-            vy: Math.sin(aim + offset) * shotSpeed,
+            vx: Math.cos(enemy.heading + offset) * shotSpeed,
+            vy: Math.sin(enemy.heading + offset) * shotSpeed,
             damage,
             life: 4,
           })
@@ -619,30 +629,22 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       }
     }
 
-    // Main hull.
+    // A small common core frame replaces a conventional ship-shaped hull.
     ctx.strokeStyle = accent
     ctx.shadowColor = accent
     ctx.shadowBlur = power >= 10 ? 20 : 9
     ctx.lineWidth = 2
     ctx.fillStyle = '#08191f'
-    ctx.beginPath()
-    ctx.moveTo(30, 0)
-    ctx.lineTo(10, -15)
-    ctx.lineTo(-26, -16)
-    ctx.lineTo(-32, 0)
-    ctx.lineTo(-26, 16)
-    ctx.lineTo(10, 15)
-    ctx.closePath()
-    ctx.fill()
-    ctx.stroke()
+    ctx.fillRect(-13, -13, 26, 26)
+    ctx.strokeRect(-13, -13, 26, 26)
 
     // Fixed forward gun, always visible so the base loadout is readable.
     ctx.fillStyle = '#0d222b'
     ctx.strokeStyle = '#5f97a1'
     ctx.shadowBlur = 0
     ctx.lineWidth = 1.5
-    ctx.fillRect(14, -3.5, 22, 7)
-    ctx.strokeRect(14, -3.5, 22, 7)
+    ctx.fillRect(13, -5, 34, 10)
+    ctx.strokeRect(13, -5, 34, 10)
 
     // Exposed core.
     ctx.shadowColor = accent
@@ -733,6 +735,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       const locked = part.kind === 'core' && !exposed
       ctx.save()
       ctx.translate(pos.x, pos.y)
+      ctx.rotate(enemy.heading)
       ctx.strokeStyle = part.kind === 'core' ? RED : '#91acb8'
       ctx.fillStyle = locked ? '#171c20' : part.kind === 'core' ? '#33121a' : '#0a171d'
       ctx.lineWidth = 1.5
@@ -805,7 +808,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.textBaseline = 'top'
     ctx.font = '700 13px ui-monospace, monospace'
     ctx.fillStyle = CYAN
-    ctx.fillText(`CORE ${Math.ceil(playerCore().hp)}%`, 30, 27)
+    ctx.fillText(`CORE ${Math.ceil(playerCore().hp / playerCore().maxHp * 100)}%`, 30, 27)
     ctx.fillStyle = power >= 10 ? AMBER : '#d9ffff'
     ctx.fillText(`FIRE ${power}${power >= 10 ? '  // OVERFLOW' : ''}`, 130, 27)
     ctx.fillStyle = mass > 6 ? RED : '#91a9b3'
@@ -1146,9 +1149,9 @@ function distanceTo(a: Point, b: Point): number {
 
 function createPlayerModules(): PlayerModule[] {
   return [
-    { id: 'armor-top', kind: 'armor', offset: { x: 2, y: -21 }, hp: 42, maxHp: 42 },
-    { id: 'armor-bottom', kind: 'armor', offset: { x: 2, y: 21 }, hp: 42, maxHp: 42 },
-    { id: 'core', kind: 'core', offset: { x: 0, y: 0 }, hp: 100, maxHp: 100 },
+    { id: 'armor-top', kind: 'armor', offset: { x: 0, y: -32 }, hp: 24, maxHp: 24 },
+    { id: 'armor-bottom', kind: 'armor', offset: { x: 0, y: 32 }, hp: 24, maxHp: 24 },
+    { id: 'core', kind: 'core', offset: { x: 0, y: 0 }, hp: 56, maxHp: 56 },
   ]
 }
 
