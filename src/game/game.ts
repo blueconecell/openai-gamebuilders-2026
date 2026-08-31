@@ -73,7 +73,10 @@ const RED = '#ff5268'
 const INK = '#071016'
 const WORLD = { w: 4200, h: 4200 }
 const STICK_RADIUS = 62
-const ZOOM = 0.72
+const DEFAULT_ZOOM = 0.72
+const MIN_ZOOM = 0.45
+const MAX_ZOOM = 1.1
+const BOSS_REWARD_SCRAP = 25
 const SENSOR_RANGE = 920
 const GRID_WORLD_SIZE = 120
 const CRUISE_SPEED = 112
@@ -84,7 +87,18 @@ const WARP_DURATION = 1.25
 const UNKNOWN_ZONE: Zone = { x: 2920, y: 1900, radius: 155, label: 'UNKNOWN // WARDEN', risk: '■■■□□' }
 const BOSS_ZONE: Zone = { x: 3580, y: 820, radius: 190, label: 'MAIN // LIMIT BREAKER', risk: '■■■■■' }
 
-export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
+export type GameResult = {
+  outcome: 'victory' | 'defeat'
+  scrapGained: number
+  defeated: string[]
+  discoveries: number
+  slots: Array<ShipPart | null>
+}
+
+export function createGame(
+  canvas: HTMLCanvasElement,
+  options: { onResult?(result: GameResult): void } = {},
+): { destroy(): void } {
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('Canvas 2D context is unavailable')
 
@@ -147,8 +161,10 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   let selectedMountedSlot: number | null = null
   let selectedSwapSlot: number | null = null
   let massHelpOpen = false
+  let cameraZoom = DEFAULT_ZOOM
   let tutorialPage = 0
   let frame = 0
+  let destroyed = false
   let lastTime = performance.now()
   const keys = new Set<string>()
 
@@ -182,7 +198,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   // The ship stays locked to the middle of the screen; the world scrolls past it.
   const applyCamera = () => {
     ctx.translate(width / 2, height / 2)
-    ctx.scale(ZOOM, ZOOM)
+    ctx.scale(cameraZoom, cameraZoom)
     ctx.translate(-player.x, -player.y)
   }
 
@@ -324,13 +340,22 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       phase = 'reward'
       message = '공백 복귀 완료 · 무작위 증강 3개 중 하나를 선택하세요'
     } else {
-      phase = 'void'
+      phase = 'victory'
+      save.scrap += BOSS_REWARD_SCRAP
       save.victories += 1
       overflowPulse = 3
       unknownResolved = true
       explored = 100
-      persistSafeRun()
-      message = 'LIMIT 돌파 · 공백 지역으로 자동 복귀했습니다'
+      save.safeRun = null
+      persist()
+      message = `LIMIT 돌파 · 보상 ${BOSS_REWARD_SCRAP} SCRAP 획득`
+      options.onResult?.({
+        outcome: 'victory',
+        scrapGained: BOSS_REWARD_SCRAP,
+        defeated: ['미지 정예기체 // WARDEN', 'MAIN SIGNAL // LIMIT BREAKER'],
+        discoveries: save.discoveries,
+        slots: slots.map((part) => part ? { ...part } : null),
+      })
     }
   }
 
@@ -564,6 +589,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       event.preventDefault()
     }
     if (!event.repeat && ['space', 'shiftleft', 'shiftright'].includes(code)) triggerBoost()
+    if (!event.repeat && ['minus', 'bracketleft', 'numpadsubtract'].includes(code)) changeZoom(-0.1)
+    if (!event.repeat && ['equal', 'bracketright', 'numpadadd'].includes(code)) changeZoom(0.1)
   }
   const onKeyUp = (event: KeyboardEvent) => keys.delete(event.code.toLowerCase())
   const onBlur = () => {
@@ -614,6 +641,11 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       }
     }
     return { x: 0, y: 0 }
+  }
+
+  const changeZoom = (delta: number) => {
+    cameraZoom = clamp(Math.round((cameraZoom + delta) * 100) / 100, MIN_ZOOM, MAX_ZOOM)
+    message = `화면 배율 ${Math.round(cameraZoom * 100)}%`
   }
 
   const triggerBoost = () => {
@@ -900,7 +932,16 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
         bullets = []
         mines = []
         enemyBullets = []
+        save.safeRun = null
+        persist()
         message = '핵심 코어가 파괴되었습니다'
+        options.onResult?.({
+          outcome: 'defeat',
+          scrapGained: 0,
+          defeated: unknownResolved ? ['미지 정예기체 // WARDEN'] : [],
+          discoveries: save.discoveries,
+          slots: [ADD_ONE, null, null, null, null, null],
+        })
       }
       return false
     })
@@ -958,10 +999,10 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.fillStyle = '#020609'
     ctx.fillRect(0, 0, width, height)
     // The grid belongs to world space, so acceleration is readable as faster line movement.
-    const leftWorld = player.x - width / (2 * ZOOM)
-    const rightWorld = player.x + width / (2 * ZOOM)
-    const topWorld = player.y - height / (2 * ZOOM)
-    const bottomWorld = player.y + height / (2 * ZOOM)
+    const leftWorld = player.x - width / (2 * cameraZoom)
+    const rightWorld = player.x + width / (2 * cameraZoom)
+    const topWorld = player.y - height / (2 * cameraZoom)
+    const bottomWorld = player.y + height / (2 * cameraZoom)
     const firstColumn = Math.floor(leftWorld / GRID_WORLD_SIZE)
     const lastColumn = Math.ceil(rightWorld / GRID_WORLD_SIZE)
     const firstRow = Math.floor(topWorld / GRID_WORLD_SIZE)
@@ -971,13 +1012,13 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       ctx.beginPath()
       for (let column = firstColumn; column <= lastColumn; column += 1) {
         if ((Math.abs(column) % 4 === 0) !== Boolean(major)) continue
-        const x = width / 2 + (column * GRID_WORLD_SIZE - player.x) * ZOOM
+        const x = width / 2 + (column * GRID_WORLD_SIZE - player.x) * cameraZoom
         ctx.moveTo(x, 0)
         ctx.lineTo(x, height)
       }
       for (let row = firstRow; row <= lastRow; row += 1) {
         if ((Math.abs(row) % 4 === 0) !== Boolean(major)) continue
-        const y = height / 2 + (row * GRID_WORLD_SIZE - player.y) * ZOOM
+        const y = height / 2 + (row * GRID_WORLD_SIZE - player.y) * cameraZoom
         ctx.moveTo(0, y)
         ctx.lineTo(width, y)
       }
@@ -1219,6 +1260,23 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.textAlign = 'center'
     ctx.textBaseline = 'top'
     ctx.fillText('SPACE / SHIFT', x + w / 2, y + h + 6)
+  }
+
+  const drawZoomControl = () => {
+    if (phase !== 'void' && phase !== 'elite' && phase !== 'boss') return
+    const y = 86
+    const x = width < 640 ? width - 138 : 180
+    addButton(x, y, 34, 30, '−', () => changeZoom(-0.1), '#8198a2', '화면 축소  [ 또는 -')
+    addButton(x + 88, y, 34, 30, '+', () => changeZoom(0.1), CYAN, '화면 확대  ] 또는 +')
+    ctx.fillStyle = 'rgba(4,12,17,.9)'
+    ctx.fillRect(x + 36, y, 50, 30)
+    ctx.strokeStyle = '#263b48'
+    ctx.strokeRect(x + 36, y, 50, 30)
+    ctx.fillStyle = '#b8cbd2'
+    ctx.font = '700 10px ui-monospace, monospace'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(`${Math.round(cameraZoom * 100)}%`, x + 61, y + 15)
   }
 
   const drawHoverTooltip = () => {
@@ -1487,9 +1545,9 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     contacts.forEach(({ zone, color }) => {
       const dx = zone.x - player.x
       const dy = zone.y - player.y
-      const screenX = width / 2 + dx * ZOOM
-      const screenY = height / 2 + dy * ZOOM
-      const screenRadius = zone.radius * ZOOM
+      const screenX = width / 2 + dx * cameraZoom
+      const screenY = height / 2 + dy * cameraZoom
+      const screenRadius = zone.radius * cameraZoom
       const nearestX = clamp(screenX, 0, width)
       const nearestY = clamp(screenY, 0, height)
       if (Math.hypot(screenX - nearestX, screenY - nearestY) <= screenRadius) return
@@ -1965,6 +2023,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     drawWarpEffect(time)
     drawStick()
     drawBoostControl()
+    drawZoomControl()
     if (phase === 'void') drawSensorHud()
     if (phase === 'tutorial') drawTutorial()
     if (phase === 'void' && warpTimer <= 0) drawVoidUi()
@@ -1992,12 +2051,13 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   }
 
   const tick = (time: number) => {
+    if (destroyed) return
     resize()
     const dt = Math.min(0.04, (time - lastTime) / 1000)
     lastTime = time
     update(dt)
     draw(time)
-    frame = requestAnimationFrame(tick)
+    if (!destroyed) frame = requestAnimationFrame(tick)
   }
 
   resize()
@@ -2005,6 +2065,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   return {
     destroy() {
+      destroyed = true
       cancelAnimationFrame(frame)
       canvas.removeEventListener('pointerdown', onPointerDown)
       canvas.removeEventListener('pointermove', onPointerMove)
