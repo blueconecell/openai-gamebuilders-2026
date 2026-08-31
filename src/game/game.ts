@@ -13,6 +13,7 @@ import {
 } from './logic'
 
 type Phase =
+  | 'tutorial'
   | 'void'
   | 'signal'
   | 'elite'
@@ -74,6 +75,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   let phase: Phase = 'void'
   const storage = safeStorage()
   let save: SaveData = readSave(storage)
+  phase = save.tutorialSeen ? 'void' : 'tutorial'
   const restoredRun = save.safeRun
   let slots: Array<ShipPart | null> = Array.from(
     { length: 6 },
@@ -114,6 +116,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   let message = '자유 항해 중 · 센서 범위에서 미지 구역을 찾으세요'
   let buttons: Button[] = []
   let shopPage = 0
+  let tutorialPage = 0
   let frame = 0
   let lastTime = performance.now()
   const keys = new Set<string>()
@@ -156,10 +159,6 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     x: (enemy?.x ?? 0) + part.offset.x * Math.cos(enemy?.heading ?? 0) - part.offset.y * Math.sin(enemy?.heading ?? 0),
     y: (enemy?.y ?? 0) + part.offset.x * Math.sin(enemy?.heading ?? 0) + part.offset.y * Math.cos(enemy?.heading ?? 0),
   })
-
-  const coreExposed = () => Boolean(enemy && enemy.modules
-    .filter((part) => part.kind === 'guard')
-    .every((part) => part.hp <= 0))
 
   const playerCore = () => playerModules.find((part) => part.kind === 'core')!
 
@@ -213,15 +212,10 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   }
 
   const damageEnemyPart = (part: EnemyModule, damage: number) => {
-    if (part.kind === 'core' && !coreExposed()) {
-      message = '코어 차폐됨 · 연결된 방어 모듈을 먼저 파괴하세요'
-      return
-    }
     part.hp = Math.max(0, part.hp - damage)
     if (part.hp > 0) return
     flash = 0.18
     if (part.kind === 'core') finishCombat()
-    else if (part.kind === 'guard' && coreExposed()) message = '코어 노출! 함선 각도를 맞춰 전방 사격하세요'
     else message = `${moduleLabel(part.kind)} 파괴`
   }
 
@@ -246,7 +240,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     mines = []
     enemyBullets = []
     enemyAttackTimer = 1.1
-    message = '보호 모듈을 먼저 파괴하세요'
+    message = '코어를 바로 노리거나 외부 모듈부터 해체하세요'
   }
 
   const beginBoss = () => {
@@ -271,7 +265,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     mines = []
     enemyBullets = []
     enemyAttackTimer = 0.9
-    message = '두 보호 모듈이 코어를 가리고 있습니다'
+    message = '코어 직접 타격 가능 · 외부 무기를 먼저 끊을 수도 있습니다'
   }
 
   const relocateToVoid = () => {
@@ -623,8 +617,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
     bullets = bullets.filter((bullet) => {
       if (bullet.kind === 'homing' && enemy) {
-        const target = enemy.modules.find((part) => part.kind === 'guard' && part.hp > 0)
-          ?? enemy.modules.find((part) => part.kind === 'core' && part.hp > 0)
+        const target = enemy.modules.find((part) => part.kind === 'core' && part.hp > 0)
+          ?? enemy.modules.find((part) => part.hp > 0)
         if (target) {
           const pos = modulePosition(target)
           const current = Math.atan2(bullet.vy, bullet.vx)
@@ -992,7 +986,6 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   const drawEnemy = () => {
     if (!enemy) return
-    const exposed = coreExposed()
     ctx.strokeStyle = '#294450'
     ctx.lineWidth = 5
     for (const part of enemy.modules) {
@@ -1007,12 +1000,11 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     for (const part of enemy.modules) {
       if (part.hp <= 0) continue
       const pos = modulePosition(part)
-      const locked = part.kind === 'core' && !exposed
       ctx.save()
       ctx.translate(pos.x, pos.y)
       ctx.rotate(enemy.heading)
       ctx.strokeStyle = part.kind === 'core' ? RED : '#91acb8'
-      ctx.fillStyle = locked ? '#171c20' : part.kind === 'core' ? '#33121a' : '#0a171d'
+      ctx.fillStyle = part.kind === 'core' ? '#33121a' : '#0a171d'
       ctx.lineWidth = 1.5
       ctx.shadowColor = ctx.strokeStyle
       ctx.shadowBlur = 5
@@ -1032,13 +1024,11 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
         ctx.arc(0, 0, 27, 0, Math.PI * 2)
         ctx.fill()
         ctx.stroke()
-        if (locked) {
-          ctx.fillStyle = '#87949a'
-          ctx.font = '700 12px ui-monospace, monospace'
-          ctx.textAlign = 'center'
-          ctx.textBaseline = 'middle'
-          ctx.fillText('LOCK', 0, 0)
-        }
+        ctx.fillStyle = '#ff9aa8'
+        ctx.font = '700 10px ui-monospace, monospace'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText('CORE', 0, 0)
       }
       ctx.shadowBlur = 0
       ctx.fillStyle = '#10171b'
@@ -1168,11 +1158,114 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     })
   }
 
+  const finishTutorial = () => {
+    save.tutorialSeen = true
+    persist()
+    tutorialPage = 0
+    phase = 'void'
+    idleTime = 4
+    cloaked = true
+    message = '시스템 확인 완료 · 자유 항해를 시작하세요'
+  }
+
+  const drawTutorial = () => {
+    const steps = [
+      { title: 'WASD로 관성 조향', body: ['한글·영문 상태와 관계없이 같은 위치 키로 이동합니다.', '키를 놓으면 짧게 활주하고 완전히 멈추면 클로킹합니다.'] },
+      { title: '코어는 처음부터 파괴 가능', body: ['모든 기체의 붉은 CORE는 첫 탄부터 피해를 받습니다.', '외부 무기와 방어 부품을 먼저 끊는 선택도 가능합니다.'] },
+      { title: '신호를 직접 찾아가기', body: ['센서 화살표의 방향과 거리를 따라 미지 구역에 접근합니다.', '경계에서 진입하거나 그대로 지나갈 수 있습니다.'] },
+      { title: '선택하고 소켓에 부착', body: ['부품을 먼저 누르면 장착 가능한 연결부에 전기가 흐릅니다.', '전투가 끝나면 안전한 공백으로 자동 복귀합니다.'] },
+    ]
+    const step = steps[tutorialPage]
+    const panel = drawPanel(step.title, step.body, 390)
+    ctx.fillStyle = tutorialPage === 1 ? RED : tutorialPage === 3 ? AMBER : CYAN
+    ctx.font = '700 11px ui-monospace, monospace'
+    ctx.textAlign = 'left'
+    ctx.fillText(`SYSTEM GUIDE  ${tutorialPage + 1} / ${steps.length}`, panel.x + 24, panel.y + 145)
+    drawTutorialGraphic(panel.x + panel.w / 2, panel.y + 225, tutorialPage)
+    addButton(panel.x + 24, panel.y + panel.h - 62, 128, 38, '건너뛰기', finishTutorial, '#81949c')
+    addButton(panel.x + panel.w - 188, panel.y + panel.h - 62, 164, 38, tutorialPage === steps.length - 1 ? '항해 시작' : '다음', () => {
+      if (tutorialPage === steps.length - 1) finishTutorial()
+      else tutorialPage += 1
+    }, tutorialPage === steps.length - 1 ? AMBER : CYAN)
+  }
+
+  const drawTutorialGraphic = (cx: number, cy: number, page: number) => {
+    ctx.save()
+    ctx.translate(cx, cy)
+    ctx.lineWidth = 2
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    if (page === 0) {
+      ctx.strokeStyle = CYAN
+      ctx.strokeRect(-22, -22, 44, 44)
+      ctx.fillStyle = CYAN
+      ctx.font = '700 11px ui-monospace, monospace'
+      ctx.fillText('WASD', 0, 0)
+      for (const angle of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+        ctx.beginPath()
+        ctx.moveTo(Math.cos(angle) * 36, Math.sin(angle) * 36)
+        ctx.lineTo(Math.cos(angle) * 64, Math.sin(angle) * 64)
+        ctx.stroke()
+      }
+    } else if (page === 1) {
+      ctx.strokeStyle = '#627b84'
+      ctx.beginPath()
+      ctx.moveTo(-70, 0)
+      ctx.lineTo(-24, 0)
+      ctx.stroke()
+      ctx.fillStyle = CYAN
+      ctx.fillRect(-78, -3, 12, 6)
+      ctx.fillStyle = '#33121a'
+      ctx.strokeStyle = RED
+      ctx.beginPath()
+      ctx.arc(0, 0, 24, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.stroke()
+      ctx.fillStyle = RED
+      ctx.font = '700 10px ui-monospace, monospace'
+      ctx.fillText('CORE', 0, 0)
+    } else if (page === 2) {
+      ctx.strokeStyle = CYAN
+      ctx.setLineDash([8, 7])
+      ctx.beginPath()
+      ctx.arc(28, 0, 58, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = CYAN
+      ctx.beginPath()
+      ctx.moveTo(-58, 0)
+      ctx.lineTo(-78, -10)
+      ctx.lineTo(-78, 10)
+      ctx.closePath()
+      ctx.fill()
+    } else {
+      ctx.fillStyle = '#0a1a21'
+      ctx.strokeStyle = CYAN
+      ctx.fillRect(-18, -18, 36, 36)
+      ctx.strokeRect(-18, -18, 36, 36)
+      for (const side of [-1, 1]) {
+        ctx.strokeStyle = AMBER
+        ctx.beginPath()
+        ctx.moveTo(side * 18, 0)
+        ctx.lineTo(side * 42, -8)
+        ctx.lineTo(side * 62, 0)
+        ctx.stroke()
+        ctx.strokeRect(side * 62 - 12, -12, 24, 24)
+      }
+    }
+    ctx.restore()
+  }
+
   const drawVoidUi = () => {
     ctx.fillStyle = '#78909a'
     ctx.textAlign = 'center'
     ctx.font = '11px ui-monospace, monospace'
-    ctx.fillText(`SENSOR ${SENSOR_RANGE}m // 자유 항해`, width / 2, 104)
+    ctx.fillText(`SENSOR ${SENSOR_RANGE}m // 자유 항해`, width / 2, width < 520 ? 140 : 104)
+    addButton(18, 88, 132, 34, '시스템 가이드 ?', () => {
+      tutorialPage = 0
+      velocity = { x: 0, y: 0 }
+      phase = 'tutorial'
+    }, '#81949c')
     if (cloaked) {
       ctx.textAlign = 'center'
       ctx.fillStyle = CYAN
@@ -1410,6 +1503,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.restore()
     drawStick()
     if (phase === 'void') drawSensorHud()
+    if (phase === 'tutorial') drawTutorial()
     if (phase === 'void') drawVoidUi()
     if (phase === 'signal') drawSignal()
     if (phase === 'reward') drawReward()
@@ -1419,7 +1513,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     if (phase === 'bossIntro') drawBossIntro()
     if (phase === 'victory') drawEnd(true)
     if (phase === 'defeat') drawEnd(false)
-    drawHud()
+    if (phase !== 'tutorial') drawHud()
     if (overflowPulse > 0) {
       ctx.strokeStyle = `rgba(255,189,89,${Math.min(1, overflowPulse) * 0.65})`
       ctx.lineWidth = 8

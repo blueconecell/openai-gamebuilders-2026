@@ -60,15 +60,16 @@ describe('local save', () => {
       scrap: 4,
       discoveries: 0,
       victories: 0,
+      tutorialSeen: false,
       safeRun: null,
     })
 
     let written = ''
     writeSave(
-      { scrap: 9, discoveries: 2, victories: 1, safeRun: null },
+      { scrap: 9, discoveries: 2, victories: 1, tutorialSeen: true, safeRun: null },
       { setItem: (key, value) => { written = `${key}:${value}` } },
     )
-    expect(written).toBe(`${SAVE_KEY}:{"scrap":9,"discoveries":2,"victories":1,"safeRun":null}`)
+    expect(written).toBe(`${SAVE_KEY}:{"scrap":9,"discoveries":2,"victories":1,"tutorialSeen":true,"safeRun":null}`)
   })
 
   it('restores a safe run and ignores storage write failures', () => {

@@ -15,6 +15,7 @@ export type SaveData = {
   scrap: number
   discoveries: number
   victories: number
+  tutorialSeen: boolean
   safeRun: SafeRun | null
 }
 
@@ -32,6 +33,7 @@ export const DEFAULT_SAVE: SaveData = {
   scrap: 0,
   discoveries: 0,
   victories: 0,
+  tutorialSeen: false,
   safeRun: null,
 }
 
@@ -68,6 +70,7 @@ export function readSave(storage?: Pick<Storage, 'getItem'>): SaveData {
       scrap: validCount(value.scrap),
       discoveries: validCount(value.discoveries),
       victories: validCount(value.victories),
+      tutorialSeen: value.tutorialSeen === true,
       safeRun: validSafeRun(value.safeRun),
     }
   } catch {
