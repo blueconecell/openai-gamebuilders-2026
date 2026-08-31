@@ -55,10 +55,10 @@ export function movementScale(mass: number): number {
 }
 
 export function partDurability(part: ShipPart): number {
-  if (part.kind === 'body') return 32
-  if (part.kind === 'weapon') return 26
-  if (part.kind === 'defense') return 28
-  return 20
+  if (part.kind === 'body') return 18
+  if (part.kind === 'weapon') return 14
+  if (part.kind === 'defense') return 16
+  return 12
 }
 
 export function readSave(storage?: Pick<Storage, 'getItem'>): SaveData {

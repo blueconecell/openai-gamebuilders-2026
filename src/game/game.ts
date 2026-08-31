@@ -242,9 +242,9 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       heading: Math.PI,
       name: '미지 정예기체 // WARDEN',
       modules: [
-        { id: 'elite-guard', kind: 'guard', offset: { x: 0, y: -52 }, hp: 36, maxHp: 36 },
-        { id: 'elite-gun', kind: 'gun', offset: { x: 58, y: 0 }, hp: 28, maxHp: 28 },
-        { id: 'elite-core', kind: 'core', offset: { x: 0, y: 0 }, hp: 68, maxHp: 68 },
+        { id: 'elite-guard', kind: 'guard', offset: { x: 0, y: -52 }, hp: 16, maxHp: 16 },
+        { id: 'elite-gun', kind: 'gun', offset: { x: 58, y: 0 }, hp: 14, maxHp: 14 },
+        { id: 'elite-core', kind: 'core', offset: { x: 0, y: 0 }, hp: 30, maxHp: 30 },
       ],
     }
     bullets = []
@@ -266,10 +266,10 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       heading: Math.PI,
       name: 'MAIN SIGNAL // LIMIT BREAKER',
       modules: [
-        { id: 'boss-guard-a', kind: 'guard', offset: { x: 0, y: -58 }, hp: 42, maxHp: 42 },
-        { id: 'boss-guard-b', kind: 'guard', offset: { x: 0, y: 58 }, hp: 42, maxHp: 42 },
-        { id: 'boss-gun', kind: 'gun', offset: { x: 64, y: 0 }, hp: 36, maxHp: 36 },
-        { id: 'boss-core', kind: 'core', offset: { x: 0, y: 0 }, hp: 110, maxHp: 110 },
+        { id: 'boss-guard-a', kind: 'guard', offset: { x: 0, y: -58 }, hp: 20, maxHp: 20 },
+        { id: 'boss-guard-b', kind: 'guard', offset: { x: 0, y: 58 }, hp: 20, maxHp: 20 },
+        { id: 'boss-gun', kind: 'gun', offset: { x: 64, y: 0 }, hp: 16, maxHp: 16 },
+        { id: 'boss-core', kind: 'core', offset: { x: 0, y: 0 }, hp: 46, maxHp: 46 },
       ],
     }
     bullets = []
@@ -1733,9 +1733,9 @@ function distanceTo(a: Point, b: Point): number {
 
 function createPlayerModules(): PlayerModule[] {
   return [
-    { id: 'armor-top', kind: 'armor', offset: { x: 0, y: -32 }, hp: 24, maxHp: 24 },
-    { id: 'armor-bottom', kind: 'armor', offset: { x: 0, y: 32 }, hp: 24, maxHp: 24 },
-    { id: 'core', kind: 'core', offset: { x: 0, y: 0 }, hp: 56, maxHp: 56 },
+    { id: 'armor-top', kind: 'armor', offset: { x: 0, y: -32 }, hp: 12, maxHp: 12 },
+    { id: 'armor-bottom', kind: 'armor', offset: { x: 0, y: 32 }, hp: 12, maxHp: 12 },
+    { id: 'core', kind: 'core', offset: { x: 0, y: 0 }, hp: 32, maxHp: 32 },
   ]
 }
 
