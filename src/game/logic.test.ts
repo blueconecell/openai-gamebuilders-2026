@@ -24,6 +24,17 @@ describe('operator rail', () => {
     expect(calculateMass([add3, null, times2])).toBe(8)
   })
 
+  it('keeps equipment mass without changing the multiplier chain', () => {
+    const equipment = [
+      add3,
+      { kind: 'weapon' as const, weapon: 'homing' as const, mass: 4 },
+      times2,
+      { kind: 'defense' as const, defense: 'shield' as const, mass: 3 },
+    ]
+    expect(calculatePower(2, equipment)).toBe(10)
+    expect(calculateMass(equipment)).toBe(15)
+  })
+
   it('caps the over-mass movement penalty', () => {
     expect(movementScale(6)).toBe(1)
     expect(movementScale(8)).toBeCloseTo(0.85)
@@ -72,5 +83,24 @@ describe('local save', () => {
       slots: [{ kind: 'add', value: 3, mass: 3 }, null],
     })
     expect(() => writeSave(restored, { setItem: () => { throw new Error('blocked') } })).not.toThrow()
+  })
+
+  it('restores weapon, body, and defense attachments', () => {
+    const restored = readSave({
+      getItem: () => JSON.stringify({
+        safeRun: {
+          slots: [
+            { kind: 'weapon', weapon: 'mine', mass: 3 },
+            { kind: 'body', mass: 2 },
+            { kind: 'defense', defense: 'repair', mass: 4 },
+          ],
+        },
+      }),
+    })
+    expect(restored.safeRun?.slots).toEqual([
+      { kind: 'weapon', weapon: 'mine', mass: 3 },
+      { kind: 'body', mass: 2 },
+      { kind: 'defense', defense: 'repair', mass: 4 },
+    ])
   })
 })

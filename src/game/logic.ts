@@ -4,6 +4,13 @@ export type OperatorPart = {
   mass: number
 }
 
+export type WeaponKind = 'homing' | 'mine' | 'saw' | 'explosive'
+export type DefenseKind = 'interceptor' | 'shield' | 'repair'
+export type WeaponPart = { kind: 'weapon'; weapon: WeaponKind; mass: number }
+export type BodyPart = { kind: 'body'; mass: number }
+export type DefensePart = { kind: 'defense'; defense: DefenseKind; mass: number }
+export type ShipPart = OperatorPart | WeaponPart | BodyPart | DefensePart
+
 export type SaveData = {
   scrap: number
   discoveries: number
@@ -15,7 +22,7 @@ export type SafeRun = {
   xRatio: number
   yRatio: number
   explored: number
-  slots: Array<OperatorPart | null>
+  slots: Array<ShipPart | null>
 }
 
 export const SAVE_KEY = 'overflow-far-space-save-v1'
@@ -27,14 +34,15 @@ export const DEFAULT_SAVE: SaveData = {
   safeRun: null,
 }
 
-export function calculatePower(base: number, slots: Array<OperatorPart | null>): number {
+export function calculatePower(base: number, slots: Array<ShipPart | null>): number {
   return slots.reduce((power, part) => {
     if (!part) return power
+    if (part.kind !== 'add' && part.kind !== 'multiply') return power
     return part.kind === 'add' ? power + part.value : power * part.value
   }, base)
 }
 
-export function calculateMass(slots: Array<OperatorPart | null>): number {
+export function calculateMass(slots: Array<ShipPart | null>): number {
   return slots.reduce((mass, part) => mass + (part?.mass ?? 0), 0)
 }
 
@@ -82,7 +90,7 @@ function validSafeRun(value: unknown): SafeRun | null {
     xRatio: validRatio(run.xRatio, 0.3),
     yRatio: validRatio(run.yRatio, 0.52),
     explored: Math.min(100, validCount(run.explored)),
-    slots: run.slots.slice(0, 4).map(validPart),
+    slots: run.slots.slice(0, 6).map(validPart),
   }
 }
 
@@ -92,10 +100,20 @@ function validRatio(value: unknown, fallback: number): number {
     : fallback
 }
 
-function validPart(value: unknown): OperatorPart | null {
+function validPart(value: unknown): ShipPart | null {
   if (!value || typeof value !== 'object') return null
-  const part = value as Partial<OperatorPart>
-  if (part.kind !== 'add' && part.kind !== 'multiply') return null
-  if (typeof part.value !== 'number' || typeof part.mass !== 'number') return null
-  return { kind: part.kind, value: part.value, mass: part.mass }
+  const part = value as Partial<ShipPart>
+  if (typeof part.mass !== 'number') return null
+  if (part.kind === 'add' || part.kind === 'multiply') {
+    if (typeof part.value !== 'number') return null
+    return { kind: part.kind, value: part.value, mass: part.mass }
+  }
+  if (part.kind === 'weapon' && ['homing', 'mine', 'saw', 'explosive'].includes(part.weapon ?? '')) {
+    return { kind: 'weapon', weapon: part.weapon!, mass: part.mass }
+  }
+  if (part.kind === 'defense' && ['interceptor', 'shield', 'repair'].includes(part.defense ?? '')) {
+    return { kind: 'defense', defense: part.defense!, mass: part.mass }
+  }
+  if (part.kind === 'body') return { kind: 'body', mass: part.mass }
+  return null
 }

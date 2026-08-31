@@ -4,8 +4,11 @@ import {
   movementScale,
   readSave,
   writeSave,
+  type DefenseKind,
   type OperatorPart,
   type SaveData,
+  type ShipPart,
+  type WeaponKind,
 } from './logic'
 
 type Phase =
@@ -33,7 +36,8 @@ type EnemyModule = {
   maxHp: number
 }
 type EnemyShip = { x: number; y: number; heading: number; name: string; modules: EnemyModule[] }
-type Bullet = { x: number; y: number; vx: number; vy: number; damage: number; life: number }
+type Bullet = { x: number; y: number; vx: number; vy: number; damage: number; life: number; kind: 'cannon' | 'homing' | 'explosive' }
+type Mine = { x: number; y: number; damage: number; life: number }
 type EnemyBullet = { x: number; y: number; vx: number; vy: number; damage: number; life: number }
 type PlayerModule = { id: 'armor-top' | 'armor-bottom' | 'core'; kind: 'armor' | 'core'; offset: Point; hp: number; maxHp: number }
 type Stick = { pointerId: number; originX: number; originY: number; x: number; y: number }
@@ -41,6 +45,14 @@ type Stick = { pointerId: number; originX: number; originY: number; x: number; y
 const ADD_ONE: OperatorPart = { kind: 'add', value: 1, mass: 2 }
 const ADD_THREE: OperatorPart = { kind: 'add', value: 3, mass: 3 }
 const TIMES_TWO: OperatorPart = { kind: 'multiply', value: 2, mass: 5 }
+const HOMING_PART: ShipPart = { kind: 'weapon', weapon: 'homing', mass: 4 }
+const MINE_PART: ShipPart = { kind: 'weapon', weapon: 'mine', mass: 3 }
+const SAW_PART: ShipPart = { kind: 'weapon', weapon: 'saw', mass: 4 }
+const EXPLOSIVE_PART: ShipPart = { kind: 'weapon', weapon: 'explosive', mass: 5 }
+const BODY_PART: ShipPart = { kind: 'body', mass: 2 }
+const INTERCEPTOR_PART: ShipPart = { kind: 'defense', defense: 'interceptor', mass: 3 }
+const SHIELD_PART: ShipPart = { kind: 'defense', defense: 'shield', mass: 4 }
+const REPAIR_PART: ShipPart = { kind: 'defense', defense: 'repair', mass: 4 }
 const CYAN = '#65f5ed'
 const AMBER = '#ffbd59'
 const RED = '#ff5268'
@@ -62,11 +74,13 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const storage = safeStorage()
   let save: SaveData = readSave(storage)
   const restoredRun = save.safeRun
-  let slots: Array<OperatorPart | null> = Array.from(
-    { length: 4 },
+  let slots: Array<ShipPart | null> = Array.from(
+    { length: 6 },
     (_, index) => restoredRun?.slots[index] ?? (index === 0 ? ADD_ONE : null),
   )
-  let pendingPart: OperatorPart | null = null
+  let pendingPart: ShipPart | null = null
+  let deliveryPart: ShipPart | null = null
+  let pendingSelected = false
   let player = {
     x: WORLD.w * (restoredRun?.xRatio ?? 0.5),
     y: WORLD.h * (restoredRun?.yRatio ?? 0.5),
@@ -76,8 +90,11 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   let thrust = 0
   let enemy: EnemyShip | null = null
   let bullets: Bullet[] = []
+  let mines: Mine[] = []
   let enemyBullets: EnemyBullet[] = []
   let fireTimer = 0
+  const equipmentTimers = { homing: 0, mine: 0, saw: 0, explosive: 0, interceptor: 0, repair: 0 }
+  let shieldFlash = 0
   let enemyAttackTimer = 1.2
   let explored = restoredRun?.explored ?? 0
   let unknownDiscovered = explored > 0
@@ -90,6 +107,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   let flash = 0
   let message = '자유 항해 중 · 센서 범위에서 미지 구역을 찾으세요'
   let buttons: Button[] = []
+  let shopPage = 0
   let frame = 0
   let lastTime = performance.now()
   const keys = new Set<string>()
@@ -138,6 +156,19 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   const playerCore = () => playerModules.find((part) => part.kind === 'core')!
 
+  const damageEnemyPart = (part: EnemyModule, damage: number) => {
+    if (part.kind === 'core' && !coreExposed()) {
+      message = '코어 차폐됨 · 연결된 방어 모듈을 먼저 파괴하세요'
+      return
+    }
+    part.hp = Math.max(0, part.hp - damage)
+    if (part.hp > 0) return
+    flash = 0.18
+    if (part.kind === 'core') finishCombat()
+    else if (part.kind === 'guard' && coreExposed()) message = '코어 노출! 함선 각도를 맞춰 전방 사격하세요'
+    else message = `${moduleLabel(part.kind)} 파괴`
+  }
+
   const beginElite = () => {
     phase = 'elite'
     cloaked = false
@@ -155,6 +186,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       ],
     }
     bullets = []
+    mines = []
     enemyBullets = []
     enemyAttackTimer = 1.1
     message = '보호 모듈을 먼저 파괴하세요'
@@ -178,6 +210,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       ],
     }
     bullets = []
+    mines = []
     enemyBullets = []
     enemyAttackTimer = 0.9
     message = '두 보호 모듈이 코어를 가리고 있습니다'
@@ -185,12 +218,14 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   const finishCombat = () => {
     bullets = []
+    mines = []
     enemyBullets = []
     enemy = null
     if (phase === 'elite') {
       save.scrap += 10
       persist()
       pendingPart = ADD_THREE
+      pendingSelected = false
       phase = 'reward'
       message = '회수한 증강을 장착하거나 분해하세요'
     } else {
@@ -204,13 +239,14 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   const resetRun = () => {
     phase = 'void'
-    slots = [ADD_ONE, null, null, null]
+    slots = [ADD_ONE, null, null, null, null, null]
     pendingPart = null
     player = { x: WORLD.w * 0.5, y: WORLD.h * 0.5 }
     playerModules = createPlayerModules()
     heading = -Math.PI / 2
     enemy = null
     bullets = []
+    mines = []
     enemyBullets = []
     explored = 0
     unknownDiscovered = false
@@ -244,28 +280,30 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   }
 
   const selectSocket = (index: number) => {
-    if (!pendingPart || slots[index]) return
+    if (!pendingPart || !pendingSelected || slots[index] || index >= unlockedSocketCount(slots)) return
     slots[index] = pendingPart
     pendingPart = null
+    pendingSelected = false
     overflowPulse = calculatePower(2, slots) >= 10 ? 1.8 : 0.6
     enterVoidAfterReward()
   }
 
   const dismantlePending = () => {
     if (!pendingPart) return
-    save.scrap += pendingPart.kind === 'multiply' ? 6 : 5
+    save.scrap += pendingPart.kind === 'multiply' ? 6 : pendingPart.kind === 'weapon' ? 5 : 4
     persist()
     pendingPart = null
     enterVoidAfterReward()
   }
 
-  const buyAmplifier = () => {
-    if (save.scrap < 6) {
+  const buyPart = (part: ShipPart, cost: number) => {
+    if (save.scrap < cost) {
       message = '스크랩이 부족합니다'
       return
     }
-    save.scrap -= 6
+    save.scrap -= cost
     persist()
+    deliveryPart = part
     phase = 'delivery'
     deliveryTimer = 0
     message = '배송 캡슐이 워프 중입니다'
@@ -401,7 +439,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       message = '미지 구역 경계 · 진입 여부를 선택하세요'
       return
     }
-    const bossAvailable = slots.some((part) => part?.kind === 'multiply')
+    const bossAvailable = unknownResolved
     if (bossAvailable && distanceTo(BOSS_ZONE, player) <= BOSS_ZONE.radius) {
       phase = 'bossIntro'
       stick = null
@@ -412,7 +450,9 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const updateCombat = (dt: number) => {
     updateMovement(dt)
     if (!enemy) return
-    const chaseAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x)
+    let chaseAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x)
+    const nearbyMine = mines.find((mine) => Math.hypot(mine.x - enemy!.x, mine.y - enemy!.y) < 150)
+    if (nearbyMine) chaseAngle += Math.sin(performance.now() * 0.003) > 0 ? 0.65 : -0.65
     enemy.heading = turnToward(enemy.heading, chaseAngle, dt * 1.25)
     const chaseDistance = Math.hypot(player.x - enemy.x, player.y - enemy.y)
     if (chaseDistance > 215) {
@@ -429,11 +469,63 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
         vy: Math.sin(heading) * 560,
         damage: calculatePower(2, slots),
         life: 1.7,
+        kind: 'cannon',
       })
-      fireTimer = 0.22
+      fireTimer = 0.55
+    }
+
+    const weapons = slots.filter((part) => part?.kind === 'weapon').map((part) => part!.weapon)
+    const defenses = slots.filter((part) => part?.kind === 'defense').map((part) => part!.defense)
+    equipmentTimers.homing -= dt
+    equipmentTimers.mine -= dt
+    equipmentTimers.saw -= dt
+    equipmentTimers.explosive -= dt
+    equipmentTimers.interceptor -= dt
+    equipmentTimers.repair -= dt
+    if (weapons.includes('homing') && equipmentTimers.homing <= 0) {
+      bullets.push({ x: player.x, y: player.y, vx: Math.cos(heading) * 185, vy: Math.sin(heading) * 185, damage: 26, life: 4.5, kind: 'homing' })
+      equipmentTimers.homing = 2.6
+    }
+    if (weapons.includes('explosive') && equipmentTimers.explosive <= 0) {
+      bullets.push({ x: player.x, y: player.y, vx: Math.cos(heading) * 155, vy: Math.sin(heading) * 155, damage: 30, life: 3.8, kind: 'explosive' })
+      equipmentTimers.explosive = 3.4
+    }
+    if (weapons.includes('mine') && equipmentTimers.mine <= 0) {
+      mines.push({ x: player.x - Math.cos(heading) * 32, y: player.y - Math.sin(heading) * 32, damage: 34, life: 8 })
+      equipmentTimers.mine = 3
+    }
+    if (weapons.includes('saw') && equipmentTimers.saw <= 0) {
+      const sawX = player.x + Math.cos(heading) * 54
+      const sawY = player.y + Math.sin(heading) * 54
+      const hit = enemy.modules.find((part) => part.hp > 0 && Math.hypot(modulePosition(part).x - sawX, modulePosition(part).y - sawY) < 42)
+      if (hit) damageEnemyPart(hit, 24)
+      equipmentTimers.saw = 0.38
+    }
+    if (defenses.includes('interceptor') && equipmentTimers.interceptor <= 0) {
+      const shot = enemyBullets.find((item) => Math.hypot(item.x - player.x, item.y - player.y) < 170)
+      if (shot) {
+        enemyBullets = enemyBullets.filter((item) => item !== shot)
+        shieldFlash = 0.28
+      }
+      equipmentTimers.interceptor = 1.8
+    }
+    if (defenses.includes('repair') && equipmentTimers.repair <= 0) {
+      playerModules.forEach((part) => { part.hp = Math.min(part.maxHp, part.hp + 6) })
+      equipmentTimers.repair = 4.8
     }
 
     bullets = bullets.filter((bullet) => {
+      if (bullet.kind === 'homing' && enemy) {
+        const target = enemy.modules.find((part) => part.kind === 'guard' && part.hp > 0)
+          ?? enemy.modules.find((part) => part.kind === 'core' && part.hp > 0)
+        if (target) {
+          const pos = modulePosition(target)
+          const current = Math.atan2(bullet.vy, bullet.vx)
+          const aimed = turnToward(current, Math.atan2(pos.y - bullet.y, pos.x - bullet.x), dt * 1.6)
+          bullet.vx = Math.cos(aimed) * 185
+          bullet.vy = Math.sin(aimed) * 185
+        }
+      }
       bullet.x += bullet.vx * dt
       bullet.y += bullet.vy * dt
       bullet.life -= dt
@@ -444,19 +536,32 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
         return Math.hypot(pos.x - bullet.x, pos.y - bullet.y) <= (item.kind === 'core' ? 27 : 30)
       })
       if (part) {
-        const locked = part.kind === 'core' && !coreExposed()
-        if (!locked) part.hp = Math.max(0, part.hp - bullet.damage)
-        else message = '코어 차폐됨 · 전방 보호 부품을 노리세요'
-        if (part.hp <= 0) {
-          flash = 0.18
-          if (part.kind === 'core') finishCombat()
-          else if (part.kind === 'guard' && coreExposed()) message = '코어 노출! 함선 각도를 맞춰 전방 사격하세요'
-          else message = `${moduleLabel(part.kind)} 파괴`
+        if (bullet.kind === 'explosive' && enemy) {
+          const impact = modulePosition(part)
+          enemy.modules.forEach((candidate) => {
+            if (candidate.hp > 0 && Math.hypot(modulePosition(candidate).x - impact.x, modulePosition(candidate).y - impact.y) < 92) {
+              damageEnemyPart(candidate, bullet.damage)
+            }
+          })
+          overflowPulse = 0.35
+        } else {
+          damageEnemyPart(part, bullet.damage)
         }
         return false
       }
       return true
     })
+    if (!enemy) return
+
+    mines = mines.filter((mine) => {
+      mine.life -= dt
+      if (mine.life <= 0 || !enemy) return false
+      if (Math.hypot(mine.x - enemy.x, mine.y - enemy.y) > 82) return true
+      enemy.modules.forEach((part) => { if (part.hp > 0) damageEnemyPart(part, mine.damage) })
+      overflowPulse = 0.4
+      return false
+    })
+    if (!enemy) return
 
     enemyAttackTimer -= dt
     if (enemyAttackTimer <= 0) {
@@ -488,6 +593,16 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       shot.y += shot.vy * dt
       shot.life -= dt
       if (shot.life <= 0) return false
+      if (defenses.includes('shield')) {
+        const dx = shot.x - player.x
+        const dy = shot.y - player.y
+        const forward = dx * Math.cos(heading) + dy * Math.sin(heading)
+        const side = Math.abs(-dx * Math.sin(heading) + dy * Math.cos(heading))
+        if (forward > 0 && forward < 58 && side < 38) {
+          shieldFlash = 0.35
+          return false
+        }
+      }
       const hit = playerModules.find((part) => {
         if (part.hp <= 0) return false
         const pos = playerModulePosition(part, player, heading)
@@ -501,6 +616,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
         phase = 'defeat'
         enemy = null
         bullets = []
+        mines = []
         enemyBullets = []
         message = '핵심 코어가 파괴되었습니다'
       }
@@ -510,15 +626,18 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   const update = (dt: number) => {
     flash = Math.max(0, flash - dt)
+    shieldFlash = Math.max(0, shieldFlash - dt)
     overflowPulse = Math.max(0, overflowPulse - dt)
     if (phase === 'void') updateMovement(dt)
     if (phase === 'elite' || phase === 'boss') updateCombat(dt)
     if (phase === 'delivery') {
       deliveryTimer += dt
       if (deliveryTimer >= 1.8) {
-        pendingPart = TIMES_TWO
+        pendingPart = deliveryPart ?? TIMES_TWO
+        deliveryPart = null
+        pendingSelected = false
         phase = 'assembly'
-        message = '배송 완료 · 증폭기를 소켓에 장착하세요'
+        message = '배송 완료 · 부품을 선택하고 소켓에 장착하세요'
       }
     }
   }
@@ -569,10 +688,12 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   // Socket anchors around the core, in hull space (nose points along +x).
   const SOCKETS: Point[] = [
-    { x: -4, y: -30 },
-    { x: -4, y: 30 },
-    { x: -34, y: -20 },
-    { x: -34, y: 20 },
+    { x: 38, y: -24 },
+    { x: 38, y: 24 },
+    { x: 0, y: -46 },
+    { x: 0, y: 46 },
+    { x: -42, y: -25 },
+    { x: -42, y: 25 },
   ]
 
   const drawPlayer = () => {
@@ -646,6 +767,39 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.fillRect(13, -5, 34, 10)
     ctx.strokeRect(13, -5, 34, 10)
 
+    if (slots.some((part) => part?.kind === 'weapon' && part.weapon === 'saw')) {
+      ctx.save()
+      ctx.translate(57, 0)
+      ctx.rotate(performance.now() * 0.012)
+      ctx.strokeStyle = AMBER
+      ctx.beginPath()
+      for (let index = 0; index < 12; index += 1) {
+        const angle = index / 12 * Math.PI * 2
+        const radius = index % 2 ? 13 : 19
+        const x = Math.cos(angle) * radius
+        const y = Math.sin(angle) * radius
+        if (index === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.closePath()
+      ctx.stroke()
+      ctx.restore()
+    }
+    if (slots.some((part) => part?.kind === 'defense' && part.defense === 'shield')) {
+      ctx.strokeStyle = `rgba(101,245,237,${shieldFlash > 0 ? 0.95 : 0.38})`
+      ctx.lineWidth = shieldFlash > 0 ? 4 : 2
+      ctx.beginPath()
+      ctx.arc(0, 0, 58, -0.72, 0.72)
+      ctx.stroke()
+    }
+    if (slots.some((part) => part?.kind === 'defense' && part.defense === 'repair')) {
+      for (const side of [-1, 1]) {
+        const botAngle = performance.now() * 0.0018 * side
+        ctx.fillStyle = CYAN
+        ctx.fillRect(Math.cos(botAngle) * 35 - 3, Math.sin(botAngle) * 35 - 3, 6, 6)
+      }
+    }
+
     // Exposed core.
     ctx.shadowColor = accent
     ctx.shadowBlur = 16
@@ -688,7 +842,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       ctx.font = '700 11px ui-monospace, monospace'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillText(operatorLabel(part), 0, 0)
+      ctx.fillText(partLabel(part), 0, 0)
       ctx.restore()
     }
     ctx.restore()
@@ -776,12 +930,21 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   const drawCombatEffects = () => {
     for (const bullet of bullets) {
-      ctx.fillStyle = calculatePower(2, slots) >= 10 ? AMBER : CYAN
+      ctx.fillStyle = bullet.kind === 'explosive' ? RED : bullet.kind === 'homing' ? AMBER : calculatePower(2, slots) >= 10 ? AMBER : CYAN
       ctx.shadowColor = ctx.fillStyle
       ctx.shadowBlur = 10
       ctx.beginPath()
-      ctx.arc(bullet.x, bullet.y, 3.5, 0, Math.PI * 2)
+      ctx.arc(bullet.x, bullet.y, bullet.kind === 'explosive' ? 7 : bullet.kind === 'homing' ? 5 : 3.5, 0, Math.PI * 2)
       ctx.fill()
+    }
+    for (const mine of mines) {
+      ctx.strokeStyle = RED
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.arc(mine.x, mine.y, 11 + Math.sin(performance.now() * 0.01) * 2, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.fillStyle = '#48131c'
+      ctx.fillRect(mine.x - 4, mine.y - 4, 8, 8)
     }
     for (const shot of enemyBullets) {
       const angle = Math.atan2(shot.vy, shot.vx)
@@ -828,7 +991,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     if (!unknownResolved && distanceTo(UNKNOWN_ZONE, player) <= SENSOR_RANGE) {
       contacts.push({ zone: UNKNOWN_ZONE, color: CYAN })
     }
-    if (slots.some((part) => part?.kind === 'multiply') && distanceTo(BOSS_ZONE, player) <= SENSOR_RANGE) {
+    if (unknownResolved && distanceTo(BOSS_ZONE, player) <= SENSOR_RANGE) {
       contacts.push({ zone: BOSS_ZONE, color: AMBER })
     }
     for (const { zone, color } of contacts) {
@@ -856,7 +1019,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const drawSensorHud = () => {
     const contacts: Array<{ zone: Zone; color: string }> = []
     if (!unknownResolved && distanceTo(UNKNOWN_ZONE, player) <= SENSOR_RANGE) contacts.push({ zone: UNKNOWN_ZONE, color: CYAN })
-    if (slots.some((part) => part?.kind === 'multiply') && distanceTo(BOSS_ZONE, player) <= SENSOR_RANGE) {
+    if (unknownResolved && distanceTo(BOSS_ZONE, player) <= SENSOR_RANGE) {
       contacts.push({ zone: BOSS_ZONE, color: AMBER })
     }
     contacts.forEach(({ zone, color }) => {
@@ -900,7 +1063,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       const w = Math.min(260, width - 40)
       const x = width - w - 22
       addButton(x, height - 126, w, 44, '공백 상점 열기', () => { phase = 'shop' })
-      if (slots.some((part) => part?.kind === 'multiply')) {
+      if (unknownResolved) {
         addButton(x, height - 180, w, 44, '메인 신호 근처로 워프', warpNearBoss, AMBER)
       }
     }
@@ -949,82 +1112,118 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   const drawReward = () => {
     const part = pendingPart ?? ADD_THREE
-    const panel = drawPanel('부품 회수  +3', [
-      '부품을 선택한 뒤 빈 소켓을 탭하면 자동 결합됩니다.',
-      '필요 없다면 분해하여 스크랩으로 교환할 수 있습니다.',
-    ], 390)
-    drawRail(panel.x + 34, panel.y + 170, panel.w - 68, part)
+    const panel = drawPanel(`부품 회수  ${partLabel(part)}`, [
+      '부품 선택 → 전기 표시된 소켓 선택으로 결합합니다.',
+      '필요 없다면 스크랩으로 분해할 수 있습니다.',
+    ], 440)
+    drawAttachmentGrid(panel, part)
     addButton(panel.x + 24, panel.y + panel.h - 68, 180, 44, '분해  +5 SCRAP', dismantlePending, '#9db0b7')
   }
 
   const drawAssembly = () => {
-    const panel = drawPanel('배송 캡슐 개봉  ×2', [
-      '곱연산 부품은 앞쪽의 모든 값을 증폭합니다.',
-      '빈 소켓을 탭해 장착 순서를 완성하세요.',
-    ], 390)
-    drawRail(panel.x + 34, panel.y + 170, panel.w - 68, pendingPart ?? TIMES_TWO)
+    const part = pendingPart ?? TIMES_TWO
+    const panel = drawPanel(`배송 캡슐  ${partLabel(part)}`, [
+      partDescription(part),
+      '부품을 선택하면 장착 가능한 연결부가 점화됩니다.',
+    ], 440)
+    drawAttachmentGrid(panel, part)
     addButton(panel.x + 24, panel.y + panel.h - 68, 180, 44, '분해  +6 SCRAP', dismantlePending, '#9db0b7')
   }
 
-  const drawRail = (x: number, y: number, availableWidth: number, previewPart: OperatorPart) => {
-    const gap = Math.max(8, Math.min(18, availableWidth * 0.035))
-    const size = Math.max(46, Math.min(66, (availableWidth - gap * 5) / 6))
-    const coreX = x
+  const drawAttachmentGrid = (panel: { x: number; y: number; w: number; h: number }, previewPart: ShipPart) => {
+    const compact = width < 520
+    const cx = panel.x + panel.w * (compact ? 0.64 : 0.62)
+    const cy = panel.y + 250
+    const scale = compact ? 1.05 : 1.35
+    const unlocked = unlockedSocketCount(slots)
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.strokeStyle = CYAN
     ctx.fillStyle = '#0a1a21'
-    ctx.fillRect(coreX, y, size, size)
-    ctx.strokeRect(coreX, y, size, size)
+    ctx.fillRect(cx - 22, cy - 22, 44, 44)
+    ctx.strokeRect(cx - 22, cy - 22, 44, 44)
     ctx.fillStyle = CYAN
-    ctx.font = '700 16px ui-monospace, monospace'
-    ctx.fillText('CORE', coreX + size / 2, y + size / 2 - 9)
-    ctx.font = '12px ui-monospace, monospace'
-    ctx.fillText('2', coreX + size / 2, y + size / 2 + 12)
+    ctx.font = '700 11px ui-monospace, monospace'
+    ctx.fillText('CORE 2', cx, cy)
 
     slots.forEach((part, index) => {
-      const sx = x + (index + 1) * (size + gap)
-      ctx.strokeStyle = part ? (part.kind === 'multiply' ? AMBER : CYAN) : `${CYAN}88`
+      const socket = SOCKETS[index]
+      const sx = cx + socket.x * scale
+      const sy = cy + socket.y * scale
+      const available = index < unlocked
+      const canAttach = available && !part && pendingSelected
+      ctx.strokeStyle = part ? partColor(part) : available ? `${CYAN}88` : '#2a3439'
+      ctx.lineWidth = canAttach ? 2.5 : 1.2
+      ctx.setLineDash(canAttach ? [3, 4] : [])
+      ctx.beginPath()
+      if (canAttach) {
+        const jitter = Math.sin(performance.now() * 0.025 + index) * 7
+        ctx.moveTo(cx, cy)
+        ctx.lineTo((cx + sx) / 2 + jitter, (cy + sy) / 2 - jitter)
+        ctx.lineTo(sx, sy)
+      } else {
+        ctx.moveTo(cx, cy)
+        ctx.lineTo(sx, sy)
+      }
+      ctx.stroke()
       ctx.fillStyle = part ? '#0b2027' : '#071016'
-      ctx.setLineDash(part ? [] : [5, 4])
-      ctx.fillRect(sx, y, size, size)
-      ctx.strokeRect(sx, y, size, size)
+      ctx.fillRect(sx - 17, sy - 17, 34, 34)
+      ctx.strokeRect(sx - 17, sy - 17, 34, 34)
       ctx.setLineDash([])
-      ctx.fillStyle = part ? ctx.strokeStyle : '#58717b'
-      ctx.font = '700 18px ui-monospace, monospace'
-      ctx.fillText(part ? operatorLabel(part) : '+', sx + size / 2, y + size / 2)
-      if (!part) {
-        buttons.push({ x: sx - 5, y: y - 5, w: size + 10, h: size + 10, action: () => selectSocket(index) })
+      ctx.fillStyle = part ? partColor(part) : available ? '#58717b' : '#303b40'
+      ctx.font = '700 10px ui-monospace, monospace'
+      ctx.fillText(part ? partLabel(part) : available ? '+' : 'LOCK', sx, sy)
+      if (canAttach) {
+        buttons.push({ x: sx - 24, y: sy - 24, w: 48, h: 48, action: () => selectSocket(index) })
       }
     })
-    const firstEmpty = slots.findIndex((part) => !part)
+    const firstEmpty = slots.findIndex((part, index) => !part && index < unlocked)
     const preview = firstEmpty < 0 ? calculatePower(2, slots) : calculatePower(2, slots.map((part, index) => index === firstEmpty ? previewPart : part))
     ctx.textAlign = 'left'
     ctx.fillStyle = preview >= 10 ? AMBER : '#bcd1d9'
-    ctx.font = '700 13px ui-monospace, monospace'
-    ctx.fillText(`예상 화력 ${calculatePower(2, slots)} → ${preview}${preview >= 10 ? '  OVERFLOW!' : ''}`, x, y + size + 26)
+    ctx.font = '700 12px ui-monospace, monospace'
+    ctx.fillText(`FIRE ${calculatePower(2, slots)} → ${preview}${preview >= 10 ? '  OVERFLOW!' : ''}`, panel.x + 24, panel.y + 330)
+    addButton(panel.x + 24, panel.y + 190, compact ? 108 : 150, 52, pendingSelected ? `${partLabel(previewPart)} 선택됨` : `${partLabel(previewPart)} 선택`, () => {
+      pendingSelected = true
+      message = '전기 표시된 빈 소켓을 선택하세요'
+    }, partColor(previewPart))
   }
 
   const drawShop = () => {
     const panel = drawPanel('공백 상점', [
       `보유 스크랩  ${save.scrap}`,
       '구매한 부품은 배송 캡슐로 즉시 워프합니다.',
-    ], 350)
-    const cardX = panel.x + 24
-    const cardY = panel.y + 150
-    ctx.fillStyle = '#0a1820'
-    ctx.fillRect(cardX, cardY, panel.w - 48, 72)
-    ctx.strokeStyle = AMBER
-    ctx.strokeRect(cardX, cardY, panel.w - 48, 72)
-    ctx.fillStyle = AMBER
-    ctx.textAlign = 'left'
-    ctx.textBaseline = 'top'
-    ctx.font = '700 17px ui-monospace, monospace'
-    ctx.fillText('×2  OVERFLOW 증폭기', cardX + 16, cardY + 13)
-    ctx.fillStyle = '#8fa5af'
-    ctx.font = '11px ui-monospace, monospace'
-    ctx.fillText('질량 +5 · 앞선 연산 결과를 두 배로 증폭', cardX + 16, cardY + 42)
-    addButton(panel.x + panel.w - 174, cardY + 14, 134, 44, '6 SCRAP', buyAmplifier, AMBER)
+    ], 560)
+    const pages: Array<Array<{ part: ShipPart; cost: number }>> = [
+      [
+        { part: TIMES_TWO, cost: 6 }, { part: BODY_PART, cost: 4 }, { part: HOMING_PART, cost: 8 },
+      ],
+      [
+        { part: MINE_PART, cost: 6 }, { part: SAW_PART, cost: 7 }, { part: EXPLOSIVE_PART, cost: 9 },
+      ],
+      [
+        { part: SHIELD_PART, cost: 7 }, { part: INTERCEPTOR_PART, cost: 7 }, { part: REPAIR_PART, cost: 8 },
+      ],
+    ]
+    pages[shopPage].forEach(({ part, cost }, index) => {
+      const cardX = panel.x + 24
+      const cardY = panel.y + 145 + index * 58
+      ctx.fillStyle = '#0a1820'
+      ctx.fillRect(cardX, cardY, panel.w - 48, 50)
+      ctx.strokeStyle = partColor(part)
+      ctx.strokeRect(cardX, cardY, panel.w - 48, 50)
+      ctx.fillStyle = partColor(part)
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'top'
+      ctx.font = '700 13px ui-monospace, monospace'
+      ctx.fillText(partLabel(part), cardX + 12, cardY + 8)
+      ctx.fillStyle = '#8fa5af'
+      ctx.font = '10px ui-monospace, monospace'
+      ctx.fillText(partDescription(part), cardX + 12, cardY + 29)
+      addButton(panel.x + panel.w - 130, cardY + 8, 90, 34, `${cost} SCRAP`, () => buyPart(part, cost), partColor(part))
+    })
+    const nextLabels = ['무기 장비 →', '방어 장비 →', '← 기본 장비']
+    addButton(panel.x + panel.w - 150, panel.y + panel.h - 58, 126, 36, nextLabels[shopPage], () => { shopPage = (shopPage + 1) % pages.length }, AMBER)
     addButton(panel.x + 24, panel.y + panel.h - 58, 120, 36, '닫기', () => {
       phase = 'void'
       message = '상점 연결 종료'
@@ -1178,8 +1377,52 @@ function moduleLabel(kind: ModuleKind): string {
   return '핵심 코어'
 }
 
-function operatorLabel(part: OperatorPart): string {
-  return part.kind === 'add' ? `+${part.value}` : `×${part.value}`
+function unlockedSocketCount(slots: Array<ShipPart | null>): number {
+  return Math.min(6, 4 + slots.filter((part) => part?.kind === 'body').length)
+}
+
+function partColor(part: ShipPart): string {
+  if (part.kind === 'multiply' || part.kind === 'weapon') return AMBER
+  if (part.kind === 'defense') return CYAN
+  if (part.kind === 'body') return '#a6b5bb'
+  return CYAN
+}
+
+function partLabel(part: ShipPart): string {
+  if (part.kind === 'add') return `+${part.value}`
+  if (part.kind === 'multiply') return `×${part.value}`
+  if (part.kind === 'body') return 'BODY'
+  if (part.kind === 'weapon') return weaponLabel(part.weapon)
+  if (part.kind === 'defense') return defenseLabel(part.defense)
+  return 'PART'
+}
+
+function weaponLabel(kind: WeaponKind): string {
+  if (kind === 'homing') return '유도탄'
+  if (kind === 'mine') return '지뢰'
+  if (kind === 'saw') return '톱'
+  return '폭파탄'
+}
+
+function defenseLabel(kind: DefenseKind): string {
+  if (kind === 'interceptor') return '요격기'
+  if (kind === 'shield') return '전방방패'
+  return '수리봇'
+}
+
+function partDescription(part: ShipPart): string {
+  if (part.kind === 'add') return `연결 화력에 ${part.value}를 더함`
+  if (part.kind === 'multiply') return `앞선 연산 화력을 ${part.value}배 증폭`
+  if (part.kind === 'body') return '추가 부품 소켓 1개 개방'
+  if (part.kind === 'weapon') {
+    if (part.weapon === 'homing') return '느린 주기 · 강한 유도 공격'
+    if (part.weapon === 'mine') return '후방 설치 · 적이 살짝 회피'
+    if (part.weapon === 'saw') return '근접 전용 · 매우 강한 연속 피해'
+    return '느린 직선탄 · 충돌 지점 범위 폭발'
+  }
+  if (part.kind === 'defense' && part.defense === 'interceptor') return '주기적으로 근처 투사체 제거'
+  if (part.kind === 'defense' && part.defense === 'shield') return '함선 전방으로 들어오는 공격 차단'
+  return '주기적으로 수리봇이 모듈 내구도 회복'
 }
 
 function safeStorage(): Storage | undefined {
