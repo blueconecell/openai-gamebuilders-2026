@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>SCREENS PREVIEW</title>
+    <style>
+      html, body { margin: 0; background: #05070a; }
+      #preview-root { height: 100vh; height: 100dvh; }
+      #preview-tabs {
+        position: fixed; z-index: 9; top: 8px; right: 8px; display: flex; gap: 6px;
+        font: 11px ui-monospace, monospace;
+      }
+      #preview-tabs button {
+        padding: 6px 10px; border: 1px solid #263b48; background: #0c141c;
+        color: #93a7b3; cursor: pointer; font: inherit;
+      }
+      #preview-tabs button[aria-pressed='true'] { border-color: #69e6e8; color: #69e6e8; }
+    </style>
+  </head>
+  <body>
+    <nav id="preview-tabs"></nav>
+    <div id="preview-root"></div>
+    <script type="module" src="./preview.ts"></script>
+  </body>
+</html>
