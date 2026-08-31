@@ -17,7 +17,13 @@ import {
   type WeaponKind,
 } from './logic'
 import { previewPart, rewardScrapValue, rollRewardChoices } from './rewards'
-import { OVERFLOW_COOLDOWN, OVERFLOW_DURATION, OVERFLOW_THRESHOLD, basicCannonOffsets } from './combat'
+import {
+  OVERFLOW_COOLDOWN,
+  OVERFLOW_DURATION,
+  OVERFLOW_THRESHOLD,
+  basicCannonOffsets,
+  resolvedCombatPhase,
+} from './combat'
 
 type Phase =
   | 'tutorial'
@@ -275,10 +281,11 @@ export function createGame(
   }
 
   const damageEnemyPart = (part: EnemyModule, damage: number) => {
+    const targetEnemy = enemy
     part.hp = Math.max(0, part.hp - damage)
     if (part.hp > 0) return
     flash = 0.18
-    if (part.kind === 'core') finishCombat()
+    if (part.kind === 'core' && targetEnemy) finishCombat(targetEnemy)
     else message = `${moduleLabel(part.kind)} 파괴`
   }
 
@@ -340,13 +347,16 @@ export function createGame(
     stick = null
   }
 
-  const finishCombat = () => {
+  const finishCombat = (defeatedEnemy: EnemyShip) => {
+    if (enemy !== defeatedEnemy) return
+    const completedPhase = resolvedCombatPhase(phase, defeatedEnemy.modules)
+    if (!completedPhase) return
     bullets = []
     mines = []
     enemyBullets = []
     enemy = null
     relocateToVoid()
-    if (phase === 'elite') {
+    if (completedPhase === 'elite') {
       save.scrap += 10
       persist()
       pendingPart = null
@@ -355,7 +365,7 @@ export function createGame(
       rewardRerolled = false
       phase = 'reward'
       message = '공백 복귀 완료 · 무작위 증강 3개 중 하나를 선택하세요'
-    } else {
+    } else if (completedPhase === 'boss') {
       phase = 'victory'
       save.scrap += BOSS_REWARD_SCRAP
       save.victories += 1
