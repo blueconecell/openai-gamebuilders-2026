@@ -49,9 +49,13 @@ export function calculateMass(slots: Array<ShipPart | null>): number {
   return slots.reduce((mass, part) => mass + (part?.mass ?? 0), 0)
 }
 
-export function movementScale(mass: number): number {
-  if (mass <= 6) return 1
-  return Math.max(0.55, 1 - (mass - 6) * 0.075)
+export function calculateMassLimit(slots: Array<ShipPart | null>): number {
+  return 6 + slots.filter((part) => part?.kind === 'body').length * 6
+}
+
+export function movementScale(mass: number, limit = 6): number {
+  if (mass <= limit) return 1
+  return Math.max(0.55, 1 - (mass - limit) * 0.075)
 }
 
 export function partDurability(part: ShipPart): number {
@@ -128,7 +132,7 @@ function validIntegrity(value: unknown, fallback: number): number {
 
 function validRatio(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value)
-    ? Math.max(0.05, Math.min(0.95, value))
+    ? value
     : fallback
 }
 

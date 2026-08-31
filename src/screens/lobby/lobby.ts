@@ -20,7 +20,7 @@ const LOBBY_HELP = [
   '격납고에서 현재 우주선의 화력, 질량, 소켓 상태를 확인합니다.',
   '화력은 +, × 증강 부품의 연결 순서로 결정됩니다.',
   '질량이 커지면 이동과 회전이 느려집니다. 과적을 주의하세요.',
-  '몸체(BODY) 부품을 장착하면 소켓이 하나씩 더 열립니다.',
+  '몸체(BODY) 부품을 장착하면 소켓 +1, 질량 한도 +6이 적용됩니다.',
   '이어하기는 공백 공간에서 클로킹으로 저장된 탐험이 있을 때만 활성화됩니다.',
 ]
 
@@ -53,7 +53,7 @@ export function createLobbyScreen(props: LobbyProps): ScreenHandle<LobbyProps> {
     const readout = element('div', 'gb-ship-readout')
     readout.append(
       readoutRow('화력', `${ship.power}`, ship.power >= 10 ? 'is-amber' : ''),
-      readoutRow('질량', `${ship.mass}`, ship.overloaded ? 'is-danger' : ''),
+      readoutRow('질량', `${ship.mass} / ${ship.massLimit}`, ship.overloaded ? 'is-danger' : ''),
       readoutRow('소켓', `${ship.installed} / ${ship.unlocked}`),
       readoutRow('무장', `무기 ${ship.weapons} · 방어 ${ship.defenses}`),
       readoutRow('상태', ship.overloaded ? '과적' : '안정', ship.overloaded ? 'is-danger' : ''),

@@ -17,6 +17,8 @@ describe('reward choices', () => {
       fireAfter: 10,
       massBefore: 3,
       massAfter: 8,
+      massLimitBefore: 6,
+      massLimitAfter: 6,
       overloaded: true,
       canAttach: true,
     })

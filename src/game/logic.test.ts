@@ -3,6 +3,7 @@ import {
   DEFAULT_SAVE,
   SAVE_KEY,
   calculateMass,
+  calculateMassLimit,
   calculatePower,
   movementScale,
   partDurability,
@@ -41,6 +42,13 @@ describe('operator rail', () => {
     expect(movementScale(6)).toBe(1)
     expect(movementScale(8)).toBeCloseTo(0.85)
     expect(movementScale(99)).toBe(0.55)
+  })
+
+  it('raises the mass limit for every body module', () => {
+    const body = { kind: 'body' as const, mass: 4 }
+    expect(calculateMassLimit([null])).toBe(6)
+    expect(calculateMassLimit([body, body])).toBe(18)
+    expect(movementScale(14, calculateMassLimit([body]))).toBeCloseTo(0.85)
   })
 
   it('assigns deliberately fragile durability by part category', () => {
@@ -100,6 +108,16 @@ describe('local save', () => {
       slotIntegrity: [12, 0],
     })
     expect(() => writeSave(restored, { setItem: () => { throw new Error('blocked') } })).not.toThrow()
+  })
+
+  it('preserves coordinates beyond the original map bounds', () => {
+    const restored = readSave({
+      getItem: () => JSON.stringify({
+        safeRun: { xRatio: 3.5, yRatio: -2, explored: 0, slots: [] },
+      }),
+    })
+    expect(restored.safeRun?.xRatio).toBe(3.5)
+    expect(restored.safeRun?.yRatio).toBe(-2)
   })
 
   it('restores weapon, body, and defense attachments', () => {

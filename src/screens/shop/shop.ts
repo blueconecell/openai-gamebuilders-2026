@@ -121,6 +121,14 @@ function goodCard(item: ShopItem, preview: PurchasePreview): HTMLElement {
     preview.power.delta ? formatSigned(preview.power.delta) : '변화 없음',
     preview.power.delta ? 'is-amber' : '',
   ))
+  if (preview.massLimit.after !== preview.massLimit.before) {
+    delta.appendChild(deltaRow(
+      '질량 한도',
+      `${preview.massLimit.before} → ${preview.massLimit.after}`,
+      formatSigned(preview.massLimit.after - preview.massLimit.before),
+      '',
+    ))
+  }
   delta.appendChild(deltaRow(
     '질량',
     `${preview.mass.before} → ${preview.mass.after}`,

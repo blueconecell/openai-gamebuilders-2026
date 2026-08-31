@@ -1,5 +1,6 @@
 import {
   calculateMass,
+  calculateMassLimit,
   calculatePower,
   movementScale,
   partDurability,
@@ -223,10 +224,10 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     const nx = dx / distance
     const ny = dy / distance
     const overlap = 105 - distance
-    player.x = clamp(player.x - nx * overlap * 0.45, 60, WORLD.w - 60)
-    player.y = clamp(player.y - ny * overlap * 0.45, 60, WORLD.h - 60)
-    enemy.x = clamp(enemy.x + nx * overlap * 0.55, 60, WORLD.w - 60)
-    enemy.y = clamp(enemy.y + ny * overlap * 0.55, 60, WORLD.h - 60)
+    player.x -= nx * overlap * 0.45
+    player.y -= ny * overlap * 0.45
+    enemy.x += nx * overlap * 0.55
+    enemy.y += ny * overlap * 0.55
     const approachSpeed = velocity.x * nx + velocity.y * ny
     if (approachSpeed > 0) {
       velocity.x -= nx * approachSpeed * 1.45
@@ -621,7 +622,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     const movement = movementVector()
     const hasDirection = Math.hypot(movement.x, movement.y) > 0.05
     const angle = hasDirection ? Math.atan2(movement.y, movement.x) : heading
-    const massScale = movementScale(calculateMass(slots))
+    const massScale = movementScale(calculateMass(slots), calculateMassLimit(slots))
     velocity.x += Math.cos(angle) * 86 * massScale
     velocity.y += Math.sin(angle) * 86 * massScale
     const speed = Math.hypot(velocity.x, velocity.y)
@@ -644,7 +645,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     const throttle = Math.hypot(movement.x, movement.y)
     const accelerating = throttle > 0
     thrust += ((accelerating ? throttle : 0) - thrust) * Math.min(1, dt * 6)
-    const massScale = movementScale(calculateMass(slots))
+    const massScale = movementScale(calculateMass(slots), calculateMassLimit(slots))
     const maxSpeed = (boostTime > 0 ? BOOST_SPEED : CRUISE_SPEED) * massScale
     if (accelerating) {
       // Only the hull turns — rotating the camera makes the void nauseating to read.
@@ -667,12 +668,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       if (Math.hypot(velocity.x, velocity.y) < 1.2) velocity = { x: 0, y: 0 }
     }
 
-    const nextX = clamp(player.x + velocity.x * dt, 60, WORLD.w - 60)
-    const nextY = clamp(player.y + velocity.y * dt, 60, WORLD.h - 60)
-    if (nextX === 60 || nextX === WORLD.w - 60) velocity.x = 0
-    if (nextY === 60 || nextY === WORLD.h - 60) velocity.y = 0
-    player.x = nextX
-    player.y = nextY
+    player.x += velocity.x * dt
+    player.y += velocity.y * dt
 
     const drifting = Math.hypot(velocity.x, velocity.y) >= 1.2
     if (!accelerating && !drifting && phase === 'void') {
@@ -1365,6 +1362,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const drawHud = () => {
     const power = calculatePower(2, slots)
     const mass = calculateMass(slots)
+    const massLimit = calculateMassLimit(slots)
     const speed = Math.round(Math.hypot(velocity.x, velocity.y))
     const hudWidth = Math.min(430, width - 32)
     ctx.fillStyle = 'rgba(4,12,17,.86)'
@@ -1379,11 +1377,11 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.fillStyle = power >= 10 ? AMBER : '#d9ffff'
     ctx.fillText(`FIRE ${power}${power >= 10 ? '  // OVERFLOW' : ''}`, 130, 27)
     ctx.textAlign = 'right'
-    ctx.fillStyle = speed > CRUISE_SPEED * movementScale(mass) ? AMBER : '#d9ffff'
+    ctx.fillStyle = speed > CRUISE_SPEED * movementScale(mass, massLimit) ? AMBER : '#d9ffff'
     ctx.fillText(`SPD ${speed}`, 16 + hudWidth - 14, 27)
     ctx.textAlign = 'left'
-    ctx.fillStyle = mass > 6 ? RED : '#91a9b3'
-    ctx.fillText(`MASS ${mass}/6${mass > 6 ? ' 과적' : ' 안정'}`, 30, 50)
+    ctx.fillStyle = mass > massLimit ? RED : '#91a9b3'
+    ctx.fillText(`MASS ${mass}/${massLimit}${mass > massLimit ? ' 과적' : ' 안정'}`, 30, 50)
     ctx.fillStyle = AMBER
     ctx.fillText(`SCRAP ${save.scrap}`, 190, 50)
     ctx.textAlign = 'right'
@@ -1396,7 +1394,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.fillStyle = '#bed0d7'
     ctx.font = '12px ui-monospace, monospace'
     ctx.fillText(message, 28, height - 37)
-    addButton(158, 45, 22, 22, '?', () => { massHelpOpen = !massHelpOpen }, mass > 6 ? RED : '#71858d', '과적 디메리트 확인')
+    addButton(158, 45, 22, 22, '?', () => { massHelpOpen = !massHelpOpen }, mass > massLimit ? RED : '#71858d', '과적 디메리트 확인')
   }
 
   const drawOverflowStatus = () => {
@@ -1424,27 +1422,28 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const drawMassHelp = () => {
     if (!massHelpOpen || phase === 'tutorial') return
     const mass = calculateMass(slots)
-    const scale = movementScale(mass)
+    const massLimit = calculateMassLimit(slots)
+    const scale = movementScale(mass, massLimit)
     const penalty = Math.round((1 - scale) * 100)
     const panelWidth = Math.min(390, width - 32)
     const x = 16
     const y = 86
     const h = 126
     ctx.fillStyle = 'rgba(5,14,20,.97)'
-    ctx.strokeStyle = mass > 6 ? RED : CYAN
+    ctx.strokeStyle = mass > massLimit ? RED : CYAN
     ctx.lineWidth = 1
     ctx.fillRect(x, y, panelWidth, h)
     ctx.strokeRect(x, y, panelWidth, h)
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
-    ctx.fillStyle = mass > 6 ? RED : CYAN
+    ctx.fillStyle = mass > massLimit ? RED : CYAN
     ctx.font = '700 13px ui-monospace, monospace'
-    ctx.fillText(`MASS LIMIT // ${mass > 6 ? `과적 -${penalty}%` : '안정'}`, x + 14, y + 14)
+    ctx.fillText(`MASS LIMIT ${massLimit} // ${mass > massLimit ? `과적 -${penalty}%` : '안정'}`, x + 14, y + 14)
     ctx.fillStyle = '#b8cbd2'
     ctx.font = '11px ui-monospace, monospace'
-    ctx.fillText('질량 6 초과: 1당 속도·회전 -7.5%', x + 14, y + 43)
+    ctx.fillText(`질량 ${massLimit} 초과: 1당 속도·회전 -7.5%`, x + 14, y + 43)
     ctx.fillText('최대 패널티 -45% · 큰 외곽 구조는 피격 면적 증가', x + 14, y + 64)
-    ctx.fillStyle = mass > 6 ? AMBER : '#8198a2'
+    ctx.fillStyle = mass > massLimit ? AMBER : '#8198a2'
     ctx.fillText(`현재 이동·회전 효율 ${Math.round(scale * 100)}%`, x + 14, y + 91)
     addButton(x + panelWidth - 42, y + 10, 28, 24, '×', () => { massHelpOpen = false }, '#81949c')
   }
@@ -1755,7 +1754,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     const preview = previewPart(slots, part, unlockedSocketCount(slots))
     const panel = drawPanel(`배송 캡슐  ${partLabel(part)}`, [
       partDescription(part),
-      `FIRE ${preview.fireBefore} → ${preview.fireAfter} · MASS ${preview.massBefore} → ${preview.massAfter} · ${preview.overloaded ? '과적' : '안정'}`,
+      `FIRE ${preview.fireBefore} → ${preview.fireAfter} · MASS ${preview.massBefore}/${preview.massLimitBefore} → ${preview.massAfter}/${preview.massLimitAfter} · ${preview.overloaded ? '과적' : '안정'}`,
     ], 440)
     drawAttachmentGrid(panel, part)
     addButton(panel.x + 24, panel.y + panel.h - 68, 180, 44, '분해  +6 SCRAP', dismantlePending, '#9db0b7')
@@ -1889,7 +1888,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       ctx.font = '10px ui-monospace, monospace'
       ctx.fillText(partDescription(part), cardX + 12, cardY + 28)
       ctx.fillStyle = preview.overloaded ? RED : '#b8cbd2'
-      ctx.fillText(`FIRE ${preview.fireBefore}→${preview.fireAfter} · MASS ${preview.massBefore}→${preview.massAfter} · ${preview.canAttach ? preview.overloaded ? '과적' : '안정' : '소켓 부족'}`, cardX + 12, cardY + 48)
+      ctx.fillText(`FIRE ${preview.fireBefore}→${preview.fireAfter} · MASS ${preview.massBefore}/${preview.massLimitBefore}→${preview.massAfter}/${preview.massLimitAfter} · ${preview.canAttach ? preview.overloaded ? '과적' : '안정' : '소켓 부족'}`, cardX + 12, cardY + 48)
       addButton(panel.x + panel.w - 130, cardY + 8, 90, 34, `${cost} SCRAP`, () => buyPart(part, cost), partColor(part))
     })
     const nextLabels = ['무기 장비 →', '방어 장비 →', '장착 관리 →', '← 기본 장비']
@@ -2107,7 +2106,7 @@ function defenseLabel(kind: DefenseKind): string {
 function partDescription(part: ShipPart): string {
   if (part.kind === 'add') return `누적 FIRE에 ${part.value} 추가`
   if (part.kind === 'multiply') return `앞에서 계산된 누적 FIRE를 ${part.value}배`
-  if (part.kind === 'body') return 'FIRE 변화 없음 · 장착 소켓 +1'
+  if (part.kind === 'body') return 'FIRE 변화 없음 · 장착 소켓 +1 · 질량 한도 +6'
   if (part.kind === 'weapon') {
     if (part.weapon === 'homing') return '느린 주기 · 강한 유도 공격'
     if (part.weapon === 'mine') return '후방 설치 · 적이 살짝 회피'

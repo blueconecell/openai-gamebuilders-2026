@@ -1,10 +1,12 @@
-import { calculateMass, calculatePower, type ShipPart } from './logic'
+import { calculateMass, calculateMassLimit, calculatePower, type ShipPart } from './logic'
 
 export type PartPreview = {
   fireBefore: number
   fireAfter: number
   massBefore: number
   massAfter: number
+  massLimitBefore: number
+  massLimitAfter: number
   overloaded: boolean
   canAttach: boolean
 }
@@ -20,7 +22,9 @@ export function previewPart(slots: Array<ShipPart | null>, part: ShipPart, unloc
     fireAfter: target < 0 ? fireBefore : calculatePower(2, previewSlots),
     massBefore,
     massAfter,
-    overloaded: massAfter > 6,
+    massLimitBefore: calculateMassLimit(slots),
+    massLimitAfter: calculateMassLimit(previewSlots),
+    overloaded: massAfter > calculateMassLimit(previewSlots),
     canAttach: target >= 0,
   }
 }

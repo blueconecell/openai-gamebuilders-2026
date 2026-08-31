@@ -1,4 +1,4 @@
-import { calculateMass, calculatePower } from '../../game/logic'
+import { calculateMass, calculateMassLimit, calculatePower } from '../../game/logic'
 import { partColor, partKindLabel, partLabel, unlockedSockets, type ShipSlots } from '../screen'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
@@ -121,13 +121,15 @@ export function createShipPreview(slots: ShipSlots): SVGElement {
 
 export function shipSummary(slots: ShipSlots) {
   const mass = calculateMass(slots)
+  const massLimit = calculateMassLimit(slots)
   const unlocked = unlockedSockets(slots)
   return {
     power: calculatePower(2, slots),
     mass,
+    massLimit,
     installed: slots.filter(Boolean).length,
     unlocked,
-    overloaded: mass > 6,
+    overloaded: mass > massLimit,
     weapons: slots.filter((part) => part?.kind === 'weapon').length,
     defenses: slots.filter((part) => part?.kind === 'defense').length,
   }
