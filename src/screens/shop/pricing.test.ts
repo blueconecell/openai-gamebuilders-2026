@@ -14,7 +14,7 @@ describe('previewPurchase', () => {
 
     expect(preview.power).toEqual({ before: 3, after: 6, delta: 3 })
     expect(preview.mass).toEqual({ before: 2, after: 7, delta: 5 })
-    expect(preview.massLimit).toEqual({ before: 6, after: 6 })
+    expect(preview.massLimit).toEqual({ before: 15, after: 15 })
     expect(preview.scrapAfter).toBe(4)
     expect(canPurchase(preview)).toBe(true)
   })
@@ -30,7 +30,7 @@ describe('previewPurchase', () => {
   it('opens one more socket when a body part is installed', () => {
     const preview = previewPurchase(frame, slots(), 10)
     expect(preview.sockets).toEqual({ before: 4, after: 5 })
-    expect(preview.massLimit).toEqual({ before: 6, after: 12 })
+    expect(preview.massLimit).toEqual({ before: 15, after: 21 })
   })
 
   it('blocks the purchase when scrap is short or no unlocked socket is free', () => {

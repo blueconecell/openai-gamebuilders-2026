@@ -50,10 +50,10 @@ export function calculateMass(slots: Array<ShipPart | null>): number {
 }
 
 export function calculateMassLimit(slots: Array<ShipPart | null>): number {
-  return 6 + slots.filter((part) => part?.kind === 'body').length * 6
+  return 15 + slots.filter((part) => part?.kind === 'body').length * 6
 }
 
-export function movementScale(mass: number, limit = 6): number {
+export function movementScale(mass: number, limit = 15): number {
   if (mass <= limit) return 1
   return Math.max(0.55, 1 - (mass - limit) * 0.075)
 }

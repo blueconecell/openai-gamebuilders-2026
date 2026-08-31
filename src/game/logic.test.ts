@@ -39,16 +39,16 @@ describe('operator rail', () => {
   })
 
   it('caps the over-mass movement penalty', () => {
-    expect(movementScale(6)).toBe(1)
-    expect(movementScale(8)).toBeCloseTo(0.85)
+    expect(movementScale(15)).toBe(1)
+    expect(movementScale(17)).toBeCloseTo(0.85)
     expect(movementScale(99)).toBe(0.55)
   })
 
   it('raises the mass limit for every body module', () => {
     const body = { kind: 'body' as const, mass: 4 }
-    expect(calculateMassLimit([null])).toBe(6)
-    expect(calculateMassLimit([body, body])).toBe(18)
-    expect(movementScale(14, calculateMassLimit([body]))).toBeCloseTo(0.85)
+    expect(calculateMassLimit([null])).toBe(15)
+    expect(calculateMassLimit([body, body])).toBe(27)
+    expect(movementScale(23, calculateMassLimit([body]))).toBeCloseTo(0.85)
   })
 
   it('assigns deliberately fragile durability by part category', () => {
