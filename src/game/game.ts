@@ -91,6 +91,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   }
   let playerModules = createPlayerModules()
   let heading = -Math.PI / 2
+  let velocity: Point = { x: 0, y: 0 }
   let thrust = 0
   let enemy: EnemyShip | null = null
   let bullets: Bullet[] = []
@@ -196,6 +197,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     cloaked = false
     playerModules = createPlayerModules()
     heading = 0
+    velocity = { x: 0, y: 0 }
     enemy = {
       x: player.x + 430,
       y: player.y - 20,
@@ -219,6 +221,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     cloaked = false
     playerModules = createPlayerModules()
     heading = 0
+    velocity = { x: 0, y: 0 }
     enemy = {
       x: player.x + 460,
       y: player.y - 20,
@@ -267,6 +270,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     player = { x: WORLD.w * 0.5, y: WORLD.h * 0.5 }
     playerModules = createPlayerModules()
     heading = -Math.PI / 2
+    velocity = { x: 0, y: 0 }
     enemy = null
     bullets = []
     mines = []
@@ -296,6 +300,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     player.x = BOSS_ZONE.x - 760
     player.y = BOSS_ZONE.y + 180
     heading = -0.22
+    velocity = { x: 0, y: 0 }
     idleTime = 0
     cloaked = false
     phase = 'void'
@@ -384,6 +389,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const onBlur = () => {
     keys.clear()
     stick = null
+    velocity = { x: 0, y: 0 }
     if (phase === 'void') {
       cloaked = true
       idleTime = 4
@@ -431,21 +437,44 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const updateMovement = (dt: number) => {
     const movement = movementVector()
     const throttle = Math.hypot(movement.x, movement.y)
-    const moving = throttle > 0
-    thrust += ((moving ? throttle : 0) - thrust) * Math.min(1, dt * 9)
-    if (moving) {
+    const accelerating = throttle > 0
+    thrust += ((accelerating ? throttle : 0) - thrust) * Math.min(1, dt * 6)
+    const maxSpeed = 112 * movementScale(calculateMass(slots))
+    if (accelerating) {
       // Only the hull turns — rotating the camera makes the void nauseating to read.
       heading = turnToward(heading, Math.atan2(movement.y, movement.x), dt * 7)
-      const speed = 118 * movementScale(calculateMass(slots))
-      player.x = clamp(player.x + movement.x * speed * dt, 60, WORLD.w - 60)
-      player.y = clamp(player.y + movement.y * speed * dt, 60, WORLD.h - 60)
+      velocity.x += movement.x * 155 * dt
+      velocity.y += movement.y * 155 * dt
+      const speed = Math.hypot(velocity.x, velocity.y)
+      if (speed > maxSpeed) {
+        velocity.x = velocity.x / speed * maxSpeed
+        velocity.y = velocity.y / speed * maxSpeed
+      }
       idleTime = 0
       cloaked = false
-    } else if (phase === 'void') {
+    } else {
+      const glide = Math.exp(-1.15 * dt)
+      velocity.x *= glide
+      velocity.y *= glide
+      if (Math.hypot(velocity.x, velocity.y) < 1.2) velocity = { x: 0, y: 0 }
+    }
+
+    const nextX = clamp(player.x + velocity.x * dt, 60, WORLD.w - 60)
+    const nextY = clamp(player.y + velocity.y * dt, 60, WORLD.h - 60)
+    if (nextX === 60 || nextX === WORLD.w - 60) velocity.x = 0
+    if (nextY === 60 || nextY === WORLD.h - 60) velocity.y = 0
+    player.x = nextX
+    player.y = nextY
+
+    const drifting = Math.hypot(velocity.x, velocity.y) >= 1.2
+    if (!accelerating && !drifting && phase === 'void') {
       const wasCloaked = cloaked
       idleTime += dt
       cloaked = idleTime >= 3
       if (!wasCloaked && cloaked) persistSafeRun()
+    } else if (drifting) {
+      idleTime = 0
+      cloaked = false
     }
 
     if (phase !== 'void') return
@@ -459,6 +488,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     }
     if (!unknownResolved && unknownDistance <= UNKNOWN_ZONE.radius) {
       phase = 'signal'
+      velocity = { x: 0, y: 0 }
       stick = null
       message = '미지 구역 경계 · 진입 여부를 선택하세요'
       return
@@ -466,6 +496,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     const bossAvailable = unknownResolved
     if (bossAvailable && distanceTo(BOSS_ZONE, player) <= BOSS_ZONE.radius) {
       phase = 'bossIntro'
+      velocity = { x: 0, y: 0 }
       stick = null
       message = '메인 퀘스트 구역 경계'
     }
@@ -486,16 +517,18 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     }
     fireTimer -= dt
     if (fireTimer <= 0) {
-      bullets.push({
-        x: player.x + Math.cos(heading) * 26,
-        y: player.y + Math.sin(heading) * 26,
-        vx: Math.cos(heading) * 560,
-        vy: Math.sin(heading) * 560,
-        damage: calculatePower(2, slots),
-        life: 1.7,
-        kind: 'cannon',
-      })
-      fireTimer = 0.55
+      for (const side of [-1, 1]) {
+        bullets.push({
+          x: player.x + Math.cos(heading) * 28 - Math.sin(heading) * side * 6,
+          y: player.y + Math.sin(heading) * 28 + Math.cos(heading) * side * 6,
+          vx: Math.cos(heading) * 520,
+          vy: Math.sin(heading) * 520,
+          damage: calculatePower(2, slots) * 0.7,
+          life: 1.8,
+          kind: 'cannon',
+        })
+      }
+      fireTimer = 0.85
     }
 
     const weapons = slots.filter((part) => part?.kind === 'weapon').map((part) => part!.weapon)
@@ -608,8 +641,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
         })
       }
       enemyAttackTimer = guns.length
-        ? (phase === 'boss' ? 2.4 : 1.9)
-        : (phase === 'boss' ? 2.8 : 3.4)
+        ? (phase === 'boss' ? 2.8 : 2.3)
+        : (phase === 'boss' ? 3.4 : 3.8)
     }
 
     enemyBullets = enemyBullets.filter((shot) => {
@@ -793,13 +826,15 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.fillRect(-13, -13, 26, 26)
     ctx.strokeRect(-13, -13, 26, 26)
 
-    // Fixed forward gun, always visible so the base loadout is readable.
+    // Two fixed forward guns are part of every core loadout.
     ctx.fillStyle = '#0d222b'
     ctx.strokeStyle = '#5f97a1'
     ctx.shadowBlur = 0
     ctx.lineWidth = 1.5
-    ctx.fillRect(13, -5, 34, 10)
-    ctx.strokeRect(13, -5, 34, 10)
+    for (const side of [-1, 1]) {
+      ctx.fillRect(13, side * 6 - 3, 34, 6)
+      ctx.strokeRect(13, side * 6 - 3, 34, 6)
+    }
 
     if (slots.some((part) => part?.kind === 'weapon' && part.weapon === 'saw')) {
       ctx.save()
