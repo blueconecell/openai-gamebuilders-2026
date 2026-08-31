@@ -13,6 +13,7 @@ import {
   type WeaponKind,
 } from './logic'
 import { previewPart, rewardScrapValue, rollRewardChoices } from './rewards'
+import { OVERFLOW_COOLDOWN, OVERFLOW_DURATION, OVERFLOW_THRESHOLD, basicCannonOffsets } from './combat'
 
 type Phase =
   | 'tutorial'
@@ -40,7 +41,7 @@ type EnemyModule = {
   maxHp: number
 }
 type EnemyShip = { x: number; y: number; heading: number; name: string; modules: EnemyModule[] }
-type Bullet = { x: number; y: number; vx: number; vy: number; damage: number; life: number; kind: 'cannon' | 'homing' | 'explosive' }
+type Bullet = { x: number; y: number; vx: number; vy: number; damage: number; life: number; kind: 'cannon' | 'homing' | 'explosive'; size?: number }
 type Mine = { x: number; y: number; damage: number; life: number }
 type EnemyBullet = { x: number; y: number; vx: number; vy: number; damage: number; life: number }
 type PlayerModule = { id: 'armor-top' | 'armor-bottom' | 'core'; kind: 'armor' | 'core'; offset: Point; hp: number; maxHp: number }
@@ -136,11 +137,14 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   let hoverPoint: Point | null = null
   let deliveryTimer = 0
   let overflowPulse = 0
+  let overflowTime = 0
+  let overflowCooldown = 0
   let flash = 0
   let message = '자유 항해 중 · 센서 범위에서 미지 구역을 찾으세요'
   let buttons: Button[] = []
   let shopPage = 0
   let selectedMountedSlot: number | null = null
+  let selectedSwapSlot: number | null = null
   let massHelpOpen = false
   let tutorialPage = 0
   let frame = 0
@@ -345,6 +349,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     bullets = []
     mines = []
     enemyBullets = []
+    overflowTime = 0
+    overflowCooldown = 0
     explored = 0
     unknownDiscovered = false
     unknownResolved = false
@@ -460,6 +466,38 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     selectedMountedSlot = null
     persistSafeRun()
     message = `${partLabel(part)} 제거 및 판매 완료 · +${value} SCRAP`
+  }
+
+  const selectSwapSlot = (index: number) => {
+    const part = slots[index]
+    if (!part || (part.kind !== 'add' && part.kind !== 'multiply')) {
+      message = '순서 교환은 + 또는 × 증강끼리만 가능합니다'
+      return
+    }
+    if (selectedSwapSlot === null) {
+      selectedSwapSlot = index
+      message = `${partLabel(part)} 선택 · 교환할 다른 증강을 탭하세요`
+      return
+    }
+    if (selectedSwapSlot === index) {
+      selectedSwapSlot = null
+      message = '순서 교환 선택을 취소했습니다'
+      return
+    }
+    const target = slots[selectedSwapSlot]
+    if (!target || (target.kind !== 'add' && target.kind !== 'multiply')) {
+      selectedSwapSlot = index
+      message = `${partLabel(part)} 선택 · 교환할 다른 증강을 탭하세요`
+      return
+    }
+    const before = calculatePower(2, slots)
+    ;[slots[selectedSwapSlot], slots[index]] = [slots[index], slots[selectedSwapSlot]]
+    ;[slotIntegrity[selectedSwapSlot], slotIntegrity[index]] = [slotIntegrity[index], slotIntegrity[selectedSwapSlot]]
+    const after = calculatePower(2, slots)
+    selectedSwapSlot = null
+    overflowPulse = after >= OVERFLOW_THRESHOLD ? 1.4 : 0.45
+    persistSafeRun()
+    message = `증강 순서 교환 · FIRE ${before} → ${after}${after >= OVERFLOW_THRESHOLD ? ' · OVERFLOW 준비' : ''}`
   }
 
   const buyPart = (part: ShipPart, cost: number) => {
@@ -675,6 +713,13 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const updateCombat = (dt: number) => {
     updateMovement(dt)
     if (!enemy) return
+    const currentPower = calculatePower(2, slots)
+    if (currentPower >= OVERFLOW_THRESHOLD && overflowTime <= 0 && overflowCooldown <= 0) {
+      overflowTime = OVERFLOW_DURATION
+      overflowCooldown = OVERFLOW_COOLDOWN
+      overflowPulse = 1.8
+      message = `OVERFLOW 발동 · FIRE ${currentPower} · 기본포 4발`
+    }
     let chaseAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x)
     const nearbyMine = mines.find((mine) => Math.hypot(mine.x - enemy!.x, mine.y - enemy!.y) < 150)
     if (nearbyMine) chaseAngle += Math.sin(performance.now() * 0.003) > 0 ? 0.65 : -0.65
@@ -688,15 +733,17 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     resolveShipCollision()
     fireTimer -= dt
     if (fireTimer <= 0) {
-      for (const side of [-1, 1]) {
+      const overflowActive = overflowTime > 0
+      for (const side of basicCannonOffsets(overflowActive)) {
         bullets.push({
           x: player.x + Math.cos(heading) * 28 - Math.sin(heading) * side * 6,
           y: player.y + Math.sin(heading) * 28 + Math.cos(heading) * side * 6,
           vx: Math.cos(heading) * 520,
           vy: Math.sin(heading) * 520,
-          damage: calculatePower(2, slots) * 0.7,
+          damage: currentPower * 0.7,
           life: 1.8,
           kind: 'cannon',
+          size: overflowActive ? 6.5 : 3.5,
         })
       }
       fireTimer = 0.85
@@ -867,6 +914,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     shieldFlash = Math.max(0, shieldFlash - dt)
     collisionTimer = Math.max(0, collisionTimer - dt)
     overflowPulse = Math.max(0, overflowPulse - dt)
+    overflowTime = Math.max(0, overflowTime - dt)
+    overflowCooldown = Math.max(0, overflowCooldown - dt)
     boostTime = Math.max(0, boostTime - dt)
     boostCooldown = Math.max(0, boostCooldown - dt)
     if (warpTimer > 0) {
@@ -979,9 +1028,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   ]
 
   const drawPlayer = () => {
-    const power = calculatePower(2, slots)
     const pulse = 0.75 + Math.sin(performance.now() * 0.008) * 0.2
-    const accent = power >= 10 ? AMBER : CYAN
+    const accent = overflowTime > 0 ? AMBER : CYAN
     ctx.save()
     ctx.translate(player.x, player.y)
     ctx.rotate(heading)
@@ -1022,7 +1070,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     // Empty socket brackets make the expandable frame legible from the first frame.
     for (let index = 0; index < SOCKETS.length; index += 1) {
       const socket = SOCKETS[index]
-      ctx.strokeStyle = slots[index] ? '#4d7c86' : 'rgba(101,245,237,.28)'
+      ctx.strokeStyle = slots[index] ? overflowTime > 0 ? AMBER : '#4d7c86' : 'rgba(101,245,237,.28)'
       ctx.lineWidth = 2
       ctx.beginPath()
       ctx.moveTo(socket.x * 0.35, socket.y * 0.35)
@@ -1038,7 +1086,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     // A small common core frame replaces a conventional ship-shaped hull.
     ctx.strokeStyle = accent
     ctx.shadowColor = accent
-    ctx.shadowBlur = power >= 10 ? 20 : 9
+    ctx.shadowBlur = overflowTime > 0 ? 20 : 9
     ctx.lineWidth = 2
     ctx.fillStyle = '#08191f'
     ctx.fillRect(-13, -13, 26, 26)
@@ -1284,11 +1332,11 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   const drawCombatEffects = () => {
     for (const bullet of bullets) {
-      ctx.fillStyle = bullet.kind === 'explosive' ? RED : bullet.kind === 'homing' ? AMBER : calculatePower(2, slots) >= 10 ? AMBER : CYAN
+      ctx.fillStyle = bullet.kind === 'explosive' ? RED : bullet.kind === 'homing' ? AMBER : overflowTime > 0 ? AMBER : CYAN
       ctx.shadowColor = ctx.fillStyle
       ctx.shadowBlur = 10
       ctx.beginPath()
-      ctx.arc(bullet.x, bullet.y, bullet.kind === 'explosive' ? 7 : bullet.kind === 'homing' ? 5 : 3.5, 0, Math.PI * 2)
+      ctx.arc(bullet.x, bullet.y, bullet.kind === 'explosive' ? 7 : bullet.kind === 'homing' ? 5 : bullet.size ?? 3.5, 0, Math.PI * 2)
       ctx.fill()
     }
     for (const mine of mines) {
@@ -1349,6 +1397,28 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.font = '12px ui-monospace, monospace'
     ctx.fillText(message, 28, height - 37)
     addButton(158, 45, 22, 22, '?', () => { massHelpOpen = !massHelpOpen }, mass > 6 ? RED : '#71858d', '과적 디메리트 확인')
+  }
+
+  const drawOverflowStatus = () => {
+    if (phase !== 'elite' && phase !== 'boss') return
+    const active = overflowTime > 0
+    if (!active && overflowCooldown <= 0) return
+    const w = Math.min(330, width - 32)
+    const x = (width - w) / 2
+    const y = width < 520 ? 88 : 24
+    ctx.fillStyle = active ? 'rgba(44,29,7,.94)' : 'rgba(5,14,20,.9)'
+    ctx.strokeStyle = active ? AMBER : '#52666e'
+    ctx.lineWidth = active ? 2 : 1
+    ctx.fillRect(x, y, w, 48)
+    ctx.strokeRect(x, y, w, 48)
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'top'
+    ctx.fillStyle = active ? AMBER : '#8fa4ad'
+    ctx.font = '700 12px ui-monospace, monospace'
+    ctx.fillText(active ? `OVERFLOW // ${overflowTime.toFixed(1)}s` : `OVERFLOW 재충전 // ${overflowCooldown.toFixed(1)}s`, width / 2, y + 8)
+    ctx.fillStyle = active ? '#fff1c9' : '#71858d'
+    ctx.font = '10px ui-monospace, monospace'
+    ctx.fillText(active ? `CORE 2 ${operatorFormula(slots)} = FIRE ${calculatePower(2, slots)} · 기본포 4발` : 'FIRE 10 이상에서 자동 재발동', width / 2, y + 28)
   }
 
   const drawMassHelp = () => {
@@ -1753,8 +1823,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const drawShop = () => {
     const managing = shopPage === 3
     const panel = drawPanel(managing ? '장착 관리' : '공백 상점', managing ? [
-      `보유 스크랩  ${save.scrap}`,
-      '장비를 두 번 눌러 판매하고 소켓에서 제거합니다.',
+      `CORE 2 ${operatorFormula(slots)} = FIRE ${calculatePower(2, slots)}`,
+      '증강 두 개 탭: 순서 교환 · 판매 버튼 두 번: 제거',
     ] : [
       `보유 스크랩  ${save.scrap}`,
       '구매한 부품은 배송 캡슐로 즉시 워프합니다.',
@@ -1780,13 +1850,15 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
         const cardY = listTop + index * (rowHeight + rowGap)
         ctx.fillStyle = '#0a1820'
         ctx.fillRect(cardX, cardY, panel.w - 48, rowHeight)
-        ctx.strokeStyle = part ? partColor(part) : '#263b43'
+        const swapSelected = selectedSwapSlot === index
+        ctx.strokeStyle = swapSelected ? AMBER : part ? partColor(part) : '#263b43'
+        ctx.lineWidth = swapSelected ? 2.5 : 1
         ctx.strokeRect(cardX, cardY, panel.w - 48, rowHeight)
         ctx.textAlign = 'left'
         ctx.textBaseline = 'top'
         ctx.fillStyle = part ? partColor(part) : '#52636a'
         ctx.font = '700 12px ui-monospace, monospace'
-        ctx.fillText(`SLOT ${index + 1}  ${part ? partLabel(part) : 'EMPTY'}`, cardX + 12, cardY + 6)
+        ctx.fillText(`SLOT ${index + 1}  ${part ? partLabel(part) : 'EMPTY'}${swapSelected ? '  // 교환 1/2' : ''}`, cardX + 12, cardY + 6)
         if (!part) return
         const value = partResaleValue(part, slotIntegrity[index])
         ctx.fillStyle = '#8fa5af'
@@ -1794,6 +1866,9 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
         ctx.fillText(width < 520
           ? `내구 ${Math.ceil(slotIntegrity[index])}/${partDurability(part)} · 제거`
           : `내구 ${Math.ceil(slotIntegrity[index])}/${partDurability(part)} · 판매 후 소켓 비움`, cardX + 12, cardY + 23)
+        if (part.kind === 'add' || part.kind === 'multiply') {
+          buttons.push({ x: cardX, y: cardY, w: panel.w - 48, h: rowHeight, action: () => selectSwapSlot(index) })
+        }
         const confirming = selectedMountedSlot === index
         addButton(panel.x + panel.w - 154, cardY + 6, 114, Math.max(28, rowHeight - 12), confirming ? `확정 +${value}` : `판매 +${value}`, () => sellMountedPart(index), confirming ? RED : AMBER)
       })
@@ -1821,10 +1896,12 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     addButton(panel.x + panel.w - 150, panel.y + panel.h - 58, 126, 36, nextLabels[shopPage], () => {
       shopPage = (shopPage + 1) % 4
       selectedMountedSlot = null
+      selectedSwapSlot = null
     }, AMBER)
     addButton(panel.x + 24, panel.y + panel.h - 58, 120, 36, '닫기', () => {
       phase = 'void'
       selectedMountedSlot = null
+      selectedSwapSlot = null
       message = '상점 연결 종료'
     }, '#80939b')
   }
@@ -1901,6 +1978,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     if (phase === 'victory') drawEnd(true)
     if (phase === 'defeat') drawEnd(false)
     if (phase !== 'tutorial') drawHud()
+    drawOverflowStatus()
     drawMassHelp()
     drawHoverTooltip()
     if (overflowPulse > 0) {
@@ -1988,6 +2066,13 @@ function moduleLabel(kind: ModuleKind): string {
 
 function unlockedSocketCount(slots: Array<ShipPart | null>): number {
   return Math.min(6, 4 + slots.filter((part) => part?.kind === 'body').length)
+}
+
+function operatorFormula(slots: Array<ShipPart | null>): string {
+  const operators = slots
+    .filter((part): part is OperatorPart => part?.kind === 'add' || part?.kind === 'multiply')
+    .map((part) => part.kind === 'add' ? `→ +${part.value}` : `→ ×${part.value}`)
+  return operators.length ? ` ${operators.join(' ')}` : ''
 }
 
 function partColor(part: ShipPart): string {
