@@ -998,6 +998,28 @@ export function createGame(
   const drawBackground = (time: number) => {
     ctx.fillStyle = '#020609'
     ctx.fillRect(0, 0, width, height)
+
+    // Match the Session B menu wash inside the opaque canvas: four slow,
+    // low-contrast nebula lights sit behind the grid and star layers.
+    const drift = time * 0.00008
+    const washes = [
+      { x: 0.22 + Math.sin(drift) * 0.035, y: 0.18 + Math.cos(drift * 0.8) * 0.025, radius: 0.46, color: '56,128,190', alpha: 0.25 },
+      { x: 0.82 + Math.cos(drift * 0.7) * 0.03, y: 0.26 + Math.sin(drift) * 0.035, radius: 0.42, color: '150,74,190', alpha: 0.21 },
+      { x: 0.62 + Math.sin(drift * 0.6) * 0.04, y: 0.88 + Math.cos(drift) * 0.025, radius: 0.5, color: '24,154,158', alpha: 0.22 },
+      { x: 0.12 + Math.cos(drift * 0.9) * 0.025, y: 0.76 + Math.sin(drift * 0.7) * 0.03, radius: 0.36, color: '196,108,70', alpha: 0.14 },
+    ]
+    for (const wash of washes) {
+      const centerX = width * wash.x
+      const centerY = height * wash.y
+      const radius = Math.max(width, height) * wash.radius
+      const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius)
+      gradient.addColorStop(0, `rgba(${wash.color},${wash.alpha})`)
+      gradient.addColorStop(0.58, `rgba(${wash.color},${wash.alpha * 0.36})`)
+      gradient.addColorStop(1, `rgba(${wash.color},0)`)
+      ctx.fillStyle = gradient
+      ctx.fillRect(0, 0, width, height)
+    }
+
     // The grid belongs to world space, so acceleration is readable as faster line movement.
     const leftWorld = player.x - width / (2 * cameraZoom)
     const rightWorld = player.x + width / (2 * cameraZoom)
@@ -1048,11 +1070,6 @@ export function createGame(
       }
     }
     ctx.globalAlpha = 1
-    const gradient = ctx.createRadialGradient(width * 0.55, height * 0.45, 20, width * 0.55, height * 0.45, width * 0.7)
-    gradient.addColorStop(0, 'rgba(10,55,67,.14)')
-    gradient.addColorStop(1, 'rgba(0,0,0,0)')
-    ctx.fillStyle = gradient
-    ctx.fillRect(0, 0, width, height)
   }
 
   // Socket anchors around the core, in hull space (nose points along +x).
