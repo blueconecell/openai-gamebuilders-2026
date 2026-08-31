@@ -33,6 +33,12 @@ body {
   background-size: 32px 32px;
 }
 
+.menu-host {
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+}
+
 button,
 input {
   font: inherit;

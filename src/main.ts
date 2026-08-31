@@ -1,5 +1,9 @@
 import './style.css'
 import { createGame } from './game/game'
+import { partDurability, readSave, writeSave, type ShipPart } from './game/logic'
+import { createScreenFlow, type FlowData } from './screens/flow'
+import { DEFAULT_SHOP_ITEMS, type ShopItem } from './screens/shop/pricing'
+import { unlockedSockets } from './screens/screen'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 
@@ -8,7 +12,8 @@ if (!app) {
 }
 
 app.innerHTML = `
-  <main class="shell">
+  <div id="menu" class="menu-host"></div>
+  <main id="game-shell" class="shell" hidden>
     <header class="masthead">
       <div>
         <p class="eyebrow">GB//26 · GO LIMITLESS</p>
@@ -28,13 +33,87 @@ app.innerHTML = `
   </main>
 `
 
+const menu = document.querySelector<HTMLDivElement>('#menu')
+const shell = document.querySelector<HTMLElement>('#game-shell')
 const canvas = document.querySelector<HTMLCanvasElement>('#game')
 
-if (!canvas) {
-  throw new Error('Game canvas not found')
+if (!menu || !shell || !canvas) {
+  throw new Error('App UI root not found')
 }
 
-const game = createGame(canvas)
-canvas.focus()
+const storage = safeStorage()
+let save = readSave(storage)
+let slots: Array<ShipPart | null> = save.safeRun?.slots.slice(0, 6)
+  ?? [{ kind: 'add', value: 1, mass: 2 }, null, null, null, null, null]
+while (slots.length < 6) slots.push(null)
 
-window.addEventListener('beforeunload', () => game.destroy())
+const flowData = (): FlowData => ({
+  slots,
+  scrap: save.scrap,
+  discoveries: save.discoveries,
+  victories: save.victories,
+  canContinue: save.safeRun !== null,
+  items: DEFAULT_SHOP_ITEMS,
+})
+
+let game: ReturnType<typeof createGame> | null = null
+
+const startGame = (continueRun: boolean) => {
+  if (!continueRun) {
+    save.safeRun = {
+      xRatio: 0.5,
+      yRatio: 0.5,
+      explored: 0,
+      slots,
+      slotIntegrity: slots.map((part) => part ? partDurability(part) : 0),
+    }
+    writeSave(save, storage)
+  }
+  flow.hide()
+  menu.hidden = true
+  shell.hidden = false
+  game = createGame(canvas)
+  canvas.focus()
+}
+
+const purchase = (item: ShopItem) => {
+  const openSocket = slots.findIndex((slot, index) => !slot && index < unlockedSockets(slots))
+  if (openSocket < 0 || save.scrap < item.cost) return
+
+  const savedIntegrity = save.safeRun?.slotIntegrity ?? []
+  slots[openSocket] = item.part
+  save.scrap -= item.cost
+  save.safeRun = {
+    xRatio: save.safeRun?.xRatio ?? 0.5,
+    yRatio: save.safeRun?.yRatio ?? 0.5,
+    explored: save.safeRun?.explored ?? 0,
+    slots,
+    slotIntegrity: slots.map((part, index) => {
+      if (!part) return 0
+      return index === openSocket ? partDurability(part) : savedIntegrity[index] ?? partDurability(part)
+    }),
+  }
+  writeSave(save, storage)
+  flow.setData({ ...flowData(), delivering: item.name })
+}
+
+const flow = createScreenFlow(menu, flowData(), {
+  onNewRun: () => startGame(false),
+  onContinue: () => startGame(true),
+  onPurchase: purchase,
+})
+
+flow.show('lobby')
+
+window.addEventListener('beforeunload', () => {
+  game?.destroy()
+  flow.destroy()
+})
+
+function safeStorage(): Storage | undefined {
+  try {
+    return window.localStorage
+  } catch {
+    return undefined
+  }
+}
