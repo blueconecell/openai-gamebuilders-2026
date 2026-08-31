@@ -21,6 +21,12 @@ const CSS = `
   --gb-ghost: var(--ghost, #93a7b3);
   --gb-line: var(--line, #263b48);
   --gb-panel: var(--panel, #0c141c);
+  --gb-radius-panel: clamp(18px, 3vw, 26px);
+  --gb-radius-control: 16px;
+  --gb-glass: linear-gradient(145deg, rgba(20, 36, 54, 0.82), rgba(8, 15, 25, 0.68));
+  --gb-glass-soft: linear-gradient(145deg, rgba(21, 38, 57, 0.68), rgba(8, 15, 25, 0.54));
+  --gb-glass-border: rgba(158, 221, 236, 0.20);
+  --gb-glow: 0 18px 48px rgba(0, 3, 12, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 
   /*
    * Korean set in monospace is what makes an interface look machine-written.
@@ -149,17 +155,22 @@ const CSS = `
   display: grid;
   gap: 10px;
   align-content: start;
-  border: 1px solid var(--gb-line);
-  background: rgba(9, 16, 24, 0.72);
-  backdrop-filter: blur(3px);
+  border: 1px solid var(--gb-glass-border);
+  border-radius: var(--gb-radius-panel);
+  background: var(--gb-glass);
+  box-shadow: var(--gb-glow);
+  backdrop-filter: blur(16px) saturate(120%);
   padding: clamp(12px, 2.2vw, 18px);
 }
 
 /* Per-screen explainer. Collapsed by default so it never crowds the controls. */
 .gb-help {
-  border: 1px solid var(--gb-line);
-  background: rgba(9, 16, 24, 0.6);
-  backdrop-filter: blur(3px);
+  overflow: hidden;
+  border: 1px solid var(--gb-glass-border);
+  border-radius: var(--gb-radius-control);
+  background: var(--gb-glass-soft);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(14px) saturate(120%);
 }
 
 .gb-help > summary {
@@ -188,7 +199,7 @@ const CSS = `
   font-size: 10px;
 }
 
-.gb-help[open] > summary { border-bottom: 1px solid var(--gb-line); }
+.gb-help[open] > summary { border-bottom: 1px solid rgba(158, 221, 236, 0.14); }
 
 .gb-help ul {
   margin: 0;
@@ -206,8 +217,11 @@ const CSS = `
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
   gap: 1px;
-  border: 1px solid var(--gb-line);
-  background: var(--gb-line);
+  overflow: hidden;
+  border: 1px solid var(--gb-glass-border);
+  border-radius: var(--gb-radius-control);
+  background: rgba(158, 221, 236, 0.14);
+  box-shadow: 0 12px 32px rgba(0, 3, 12, 0.22);
 }
 
 .gb-stat {
@@ -215,7 +229,7 @@ const CSS = `
   flex-direction: column;
   gap: 5px;
   padding: 10px 12px;
-  background: rgba(9, 16, 24, 0.92);
+  background: linear-gradient(150deg, rgba(18, 31, 47, 0.92), rgba(7, 13, 22, 0.88));
 }
 
 .gb-stat dt {
@@ -259,16 +273,18 @@ const CSS = `
   width: 100%;
   min-height: 52px;
   padding: 12px 16px;
-  border: 1px solid var(--gb-line);
+  border: 1px solid var(--gb-glass-border);
+  border-radius: 999px;
   color: #e9ffff;
-  background: rgba(12, 20, 28, 0.86);
+  background: linear-gradient(135deg, rgba(26, 43, 62, 0.92), rgba(11, 19, 30, 0.88));
+  box-shadow: 0 9px 24px rgba(0, 3, 12, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   font: inherit;
   font-size: clamp(13px, 2.2vw, 15px);
   font-weight: 600;
   letter-spacing: 0.01em;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  transition: border-color 0.15s, background 0.15s, color 0.15s, transform 0.15s, box-shadow 0.15s;
 }
 
 .gb-button i {
@@ -279,23 +295,34 @@ const CSS = `
   letter-spacing: 0.14em;
 }
 
-.gb-button:hover:not(:disabled) { border-color: var(--gb-cyan); }
+.gb-button:hover:not(:disabled) {
+  border-color: rgba(105, 230, 232, 0.72);
+  box-shadow: 0 12px 30px rgba(0, 3, 12, 0.3), 0 0 20px rgba(105, 230, 232, 0.09);
+  transform: translateY(-1px);
+}
+.gb-button:active:not(:disabled) { transform: translateY(0); }
 .gb-button:focus-visible { outline: 2px solid var(--gb-cyan); outline-offset: 2px; }
 
 .gb-button.is-primary {
-  border-color: var(--gb-cyan);
+  border-color: rgba(185, 255, 249, 0.68);
   color: #04121a;
-  background: var(--gb-cyan);
+  background: linear-gradient(120deg, #84f0e7 0%, #6cc9ef 52%, #b5a5ff 100%);
+  box-shadow: 0 12px 30px rgba(74, 198, 221, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.48);
   font-weight: 700;
 }
 
 .gb-button.is-primary i { color: rgba(4, 18, 26, 0.72); }
-.gb-button.is-danger { border-color: var(--gb-danger); color: var(--gb-danger); }
+.gb-button.is-danger {
+  border-color: rgba(255, 92, 108, 0.58);
+  color: #ff9aa5;
+  background: linear-gradient(135deg, rgba(82, 29, 45, 0.72), rgba(24, 14, 27, 0.82));
+}
 
 .gb-button:disabled {
   color: #4d5f6b;
   border-color: #1b2a34;
   background: rgba(8, 14, 20, 0.86);
+  box-shadow: none;
   cursor: not-allowed;
 }
 
@@ -326,9 +353,11 @@ const CSS = `
 .gb-good {
   display: grid;
   gap: 10px;
-  border: 1px solid var(--gb-line);
-  background: rgba(9, 16, 24, 0.72);
-  backdrop-filter: blur(3px);
+  border: 1px solid var(--gb-glass-border);
+  border-radius: var(--gb-radius-panel);
+  background: var(--gb-glass-soft);
+  box-shadow: var(--gb-glow);
+  backdrop-filter: blur(15px) saturate(120%);
   padding: clamp(12px, 2.2vw, 16px);
 }
 
@@ -355,6 +384,8 @@ const CSS = `
 .gb-tag {
   justify-self: start;
   border: 1px solid currentColor;
+  border-radius: 999px;
+  background: rgba(105, 230, 232, 0.06);
   padding: 3px 8px;
   font-family: var(--gb-mono);
   font-size: 10px;
@@ -365,7 +396,7 @@ const CSS = `
   display: flex;
   flex-wrap: wrap;
   gap: 8px 16px;
-  border-top: 1px dashed var(--gb-line);
+  border-top: 1px solid rgba(158, 221, 236, 0.14);
   padding-top: 10px;
   font-size: 12px;
 }
@@ -399,6 +430,8 @@ const CSS = `
 
 .gb-chip {
   border: 1px solid currentColor;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
   padding: 5px 10px;
   font-family: var(--gb-mono);
   font-size: 11px;
@@ -427,8 +460,10 @@ const CSS = `
   display: flex;
   align-items: center;
   gap: 10px;
-  border: 1px solid var(--gb-amber);
-  background: rgba(255, 184, 74, 0.09);
+  border: 1px solid rgba(255, 184, 74, 0.48);
+  border-radius: var(--gb-radius-control);
+  background: linear-gradient(120deg, rgba(255, 184, 74, 0.16), rgba(115, 80, 145, 0.12));
+  box-shadow: 0 10px 28px rgba(0, 3, 12, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   padding: 11px 14px;
   color: var(--gb-amber);
   font-size: 12px;

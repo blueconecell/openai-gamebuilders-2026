@@ -31,7 +31,15 @@ type Phase =
   | 'defeat'
 
 type Point = { x: number; y: number }
-type Button = { x: number; y: number; w: number; h: number; action: () => void; hoverText?: string }
+type Button = {
+  x: number
+  y: number
+  w: number
+  h: number
+  action: () => void
+  hoverText?: string
+  hitTest?(point: Point): boolean
+}
 type ModuleKind = 'guard' | 'gun' | 'core'
 type Zone = { x: number; y: number; radius: number; label: string; risk: string }
 type EnemyModule = {
@@ -547,10 +555,12 @@ export function createGame(
     }
   }
 
-  const inside = (point: Point, button: Button) => point.x >= button.x
+  const inside = (point: Point, button: Button) => button.hitTest?.(point) ?? (
+    point.x >= button.x
     && point.x <= button.x + button.w
     && point.y >= button.y
     && point.y <= button.y + button.h
+  )
 
   // Touch drives a floating stick in the lower-left; a mouse never steers the ship.
   const inStickZone = (point: Point) => point.x < width * 0.5 && point.y > height * 0.45
@@ -979,14 +989,31 @@ export function createGame(
     }
   }
 
+  const glassPanel = (x: number, y: number, w: number, h: number, radius = 18, accent = '#35515d') => {
+    const fill = ctx.createLinearGradient(x, y, x + w, y + h)
+    fill.addColorStop(0, 'rgba(13,31,43,.92)')
+    fill.addColorStop(0.55, 'rgba(8,17,27,.9)')
+    fill.addColorStop(1, 'rgba(31,17,45,.82)')
+    roundedPath(ctx, x, y, w, h, radius)
+    ctx.fillStyle = fill
+    ctx.fill()
+    ctx.strokeStyle = accent
+    ctx.lineWidth = 1
+    ctx.stroke()
+  }
+
   const addButton = (x: number, y: number, w: number, h: number, label: string, action: () => void, accent = CYAN, hoverText?: string) => {
     const button = { x, y, w, h, action, hoverText }
     const hovered = hoverPoint ? inside(hoverPoint, button) : false
-    ctx.fillStyle = `${accent}${hovered ? '30' : '18'}`
+    const fill = ctx.createLinearGradient(x, y, x + w, y + h)
+    fill.addColorStop(0, `${accent}${hovered ? '40' : '24'}`)
+    fill.addColorStop(1, hovered ? 'rgba(116,72,168,.32)' : 'rgba(38,25,59,.2)')
+    roundedPath(ctx, x, y, w, h, Math.min(18, h / 2))
+    ctx.fillStyle = fill
+    ctx.fill()
     ctx.strokeStyle = accent
     ctx.lineWidth = hovered ? 2 : 1
-    ctx.fillRect(x, y, w, h)
-    ctx.strokeRect(x, y, w, h)
+    ctx.stroke()
     ctx.fillStyle = accent
     ctx.font = '700 14px ui-monospace, monospace'
     ctx.textAlign = 'center'
@@ -1266,17 +1293,48 @@ export function createGame(
   const drawBoostControl = () => {
     if ((phase !== 'void' && phase !== 'elite' && phase !== 'boss') || warpTimer > 0) return
     const ready = boostCooldown <= 0
-    const w = 88
-    const h = 54
-    const x = width - w - 22
-    const y = Math.max(100, height * 0.62 - h / 2)
+    const size = 72
+    const x = width - size - 28
+    const y = Math.max(120, height * 0.53 - size / 2)
     const label = ready ? 'BOOST' : `${boostCooldown.toFixed(1)}s`
-    addButton(x, y, w, h, label, triggerBoost, ready ? AMBER : '#667982')
+    const centerX = x + size / 2
+    const centerY = y + size / 2
+    const button: Button = {
+      x,
+      y,
+      w: size,
+      h: size,
+      action: triggerBoost,
+      hoverText: '추진기 점화 · SPACE / SHIFT',
+      hitTest: (point) => Math.hypot(point.x - centerX, point.y - centerY) <= size / 2,
+    }
+    const hovered = hoverPoint ? inside(hoverPoint, button) : false
+    const glow = ctx.createRadialGradient(centerX, centerY, 4, centerX, centerY, size / 2)
+    glow.addColorStop(0, ready ? 'rgba(255,221,151,.82)' : 'rgba(102,121,130,.48)')
+    glow.addColorStop(0.48, ready ? 'rgba(255,153,61,.32)' : 'rgba(69,82,91,.24)')
+    glow.addColorStop(1, 'rgba(21,12,27,.86)')
+    ctx.beginPath()
+    ctx.arc(centerX, centerY, size / 2, 0, Math.PI * 2)
+    ctx.fillStyle = glow
+    ctx.fill()
+    ctx.strokeStyle = ready ? AMBER : '#667982'
+    ctx.lineWidth = hovered ? 3 : 1.5
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.arc(centerX, centerY, size / 2 - 7, -Math.PI * 0.8, Math.PI * 0.55)
+    ctx.strokeStyle = ready ? 'rgba(255,218,143,.72)' : 'rgba(102,121,130,.42)'
+    ctx.stroke()
+    ctx.fillStyle = ready ? '#ffe2a8' : '#8b9ba2'
+    ctx.font = '800 11px ui-monospace, monospace'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(label, centerX, centerY)
+    buttons.push(button)
     ctx.fillStyle = ready ? '#dca34f' : '#667982'
     ctx.font = '9px ui-monospace, monospace'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'top'
-    ctx.fillText('SPACE / SHIFT', x + w / 2, y + h + 6)
+    ctx.fillText('THRUSTER · SHIFT', centerX, y + size + 7)
   }
 
   const drawZoomControl = () => {
@@ -1285,10 +1343,7 @@ export function createGame(
     const x = width < 640 ? width - 138 : 180
     addButton(x, y, 34, 30, '−', () => changeZoom(-0.1), '#8198a2', '화면 축소  [ 또는 -')
     addButton(x + 88, y, 34, 30, '+', () => changeZoom(0.1), CYAN, '화면 확대  ] 또는 +')
-    ctx.fillStyle = 'rgba(4,12,17,.9)'
-    ctx.fillRect(x + 36, y, 50, 30)
-    ctx.strokeStyle = '#263b48'
-    ctx.strokeRect(x + 36, y, 50, 30)
+    glassPanel(x + 36, y, 50, 30, 15, '#263b48')
     ctx.fillStyle = '#b8cbd2'
     ctx.font = '700 10px ui-monospace, monospace'
     ctx.textAlign = 'center'
@@ -1304,11 +1359,7 @@ export function createGame(
     const tooltipWidth = Math.min(width - 32, ctx.measureText(hovered.hoverText).width + 28)
     const x = clamp(hovered.x + hovered.w - tooltipWidth, 16, width - tooltipWidth - 16)
     const y = Math.max(88, hovered.y - 38)
-    ctx.fillStyle = 'rgba(18,11,8,.94)'
-    ctx.strokeStyle = AMBER
-    ctx.lineWidth = 1
-    ctx.fillRect(x, y, tooltipWidth, 28)
-    ctx.strokeRect(x, y, tooltipWidth, 28)
+    glassPanel(x, y, tooltipWidth, 28, 14, AMBER)
     ctx.fillStyle = AMBER
     ctx.textAlign = 'left'
     ctx.textBaseline = 'middle'
@@ -1440,10 +1491,7 @@ export function createGame(
     const massLimit = calculateMassLimit(slots)
     const speed = Math.round(Math.hypot(velocity.x, velocity.y))
     const hudWidth = Math.min(430, width - 32)
-    ctx.fillStyle = 'rgba(4,12,17,.86)'
-    ctx.fillRect(16, 16, hudWidth, 62)
-    ctx.strokeStyle = '#223944'
-    ctx.strokeRect(16, 16, hudWidth, 62)
+    glassPanel(16, 16, hudWidth, 62, 20, '#2d5665')
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
     ctx.font = '700 13px ui-monospace, monospace'
@@ -1464,8 +1512,8 @@ export function createGame(
     ctx.fillText(boostCooldown <= 0 ? 'BST READY' : `BST ${boostCooldown.toFixed(1)}s`, 16 + hudWidth - 14, 50)
     ctx.textAlign = 'left'
 
-    ctx.fillStyle = 'rgba(4,12,17,.76)'
-    ctx.fillRect(16, height - 46, Math.min(width - 32, 620), 30)
+    const messageWidth = Math.min(width - 32, 620)
+    glassPanel(16, height - 46, messageWidth, 30, 15, 'rgba(72,119,130,.5)')
     ctx.fillStyle = '#bed0d7'
     ctx.font = '12px ui-monospace, monospace'
     ctx.fillText(message, 28, height - 37)
@@ -1479,11 +1527,7 @@ export function createGame(
     const w = Math.min(330, width - 32)
     const x = (width - w) / 2
     const y = width < 520 ? 88 : 24
-    ctx.fillStyle = active ? 'rgba(44,29,7,.94)' : 'rgba(5,14,20,.9)'
-    ctx.strokeStyle = active ? AMBER : '#52666e'
-    ctx.lineWidth = active ? 2 : 1
-    ctx.fillRect(x, y, w, 48)
-    ctx.strokeRect(x, y, w, 48)
+    glassPanel(x, y, w, 48, 20, active ? AMBER : '#52666e')
     ctx.textAlign = 'center'
     ctx.textBaseline = 'top'
     ctx.fillStyle = active ? AMBER : '#8fa4ad'
@@ -1504,11 +1548,7 @@ export function createGame(
     const x = 16
     const y = 86
     const h = 126
-    ctx.fillStyle = 'rgba(5,14,20,.97)'
-    ctx.strokeStyle = mass > massLimit ? RED : CYAN
-    ctx.lineWidth = 1
-    ctx.fillRect(x, y, panelWidth, h)
-    ctx.strokeRect(x, y, panelWidth, h)
+    glassPanel(x, y, panelWidth, h, 22, mass > massLimit ? RED : CYAN)
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
     ctx.fillStyle = mass > massLimit ? RED : CYAN
@@ -1720,11 +1760,7 @@ export function createGame(
     const h = Math.min(panelHeight, height - 100)
     const x = (width - w) / 2
     const y = (height - h) / 2
-    ctx.fillStyle = 'rgba(5,14,20,.96)'
-    ctx.fillRect(x, y, w, h)
-    ctx.strokeStyle = '#35515d'
-    ctx.lineWidth = 1
-    ctx.strokeRect(x, y, w, h)
+    glassPanel(x, y, w, h, 26, '#426575')
     ctx.fillStyle = CYAN
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
@@ -1922,12 +1958,8 @@ export function createGame(
       slots.forEach((part, index) => {
         const cardX = panel.x + 24
         const cardY = listTop + index * (rowHeight + rowGap)
-        ctx.fillStyle = '#0a1820'
-        ctx.fillRect(cardX, cardY, panel.w - 48, rowHeight)
         const swapSelected = selectedSwapSlot === index
-        ctx.strokeStyle = swapSelected ? AMBER : part ? partColor(part) : '#263b43'
-        ctx.lineWidth = swapSelected ? 2.5 : 1
-        ctx.strokeRect(cardX, cardY, panel.w - 48, rowHeight)
+        glassPanel(cardX, cardY, panel.w - 48, rowHeight, 15, swapSelected ? AMBER : part ? partColor(part) : '#263b43')
         ctx.textAlign = 'left'
         ctx.textBaseline = 'top'
         ctx.fillStyle = part ? partColor(part) : '#52636a'
@@ -1950,10 +1982,7 @@ export function createGame(
       const preview = previewPart(slots, part, unlockedSocketCount(slots))
       const cardX = panel.x + 24
       const cardY = panel.y + 145 + index * 76
-      ctx.fillStyle = '#0a1820'
-      ctx.fillRect(cardX, cardY, panel.w - 48, 68)
-      ctx.strokeStyle = partColor(part)
-      ctx.strokeRect(cardX, cardY, panel.w - 48, 68)
+      glassPanel(cardX, cardY, panel.w - 48, 68, 17, partColor(part))
       ctx.fillStyle = partColor(part)
       ctx.textAlign = 'left'
       ctx.textBaseline = 'top'
@@ -2100,6 +2129,24 @@ export function createGame(
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
+}
+
+function roundedPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const r = Math.min(radius, width / 2, height / 2)
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.arcTo(x + width, y, x + width, y + height, r)
+  ctx.arcTo(x + width, y + height, x, y + height, r)
+  ctx.arcTo(x, y + height, x, y, r)
+  ctx.arcTo(x, y, x + width, y, r)
+  ctx.closePath()
 }
 
 function distanceTo(a: Point, b: Point): number {
