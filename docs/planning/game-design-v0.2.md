@@ -1,4 +1,4 @@
-# OVERFLOW: FAR SPACE — 게임 기획 보강안 (v0.2)
+# 무한항로 — 게임 기획 보강안 (v0.2)
 
 > OpenAI GameBuilders 2026 본선 / 주제: **Go Limitless, Surprise Me**
 

@@ -12,12 +12,12 @@ app.innerHTML = `
     <header class="masthead">
       <div>
         <p class="eyebrow">GB//26 · GO LIMITLESS</p>
-        <h1>OVERFLOW<span>:</span> FAR SPACE</h1>
+        <h1>무한항로</h1>
       </div>
       <p class="status"><i></i> LOCAL PILOT LINK</p>
     </header>
     <section class="game-frame" aria-label="게임 데모">
-      <canvas id="game" width="1280" height="720" tabindex="0" aria-label="OVERFLOW FAR SPACE 플레이 화면"></canvas>
+      <canvas id="game" width="1280" height="720" tabindex="0" aria-label="무한항로 플레이 화면"></canvas>
     </section>
     <footer class="control-strip" aria-label="조작 안내">
       <p><kbd>WASD</kbd><span>또는 드래그로 관성 조향</span></p>

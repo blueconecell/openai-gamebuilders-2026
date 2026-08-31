@@ -6,6 +6,7 @@ import {
   calculatePower,
   movementScale,
   partDurability,
+  partResaleValue,
   readSave,
   writeSave,
   type OperatorPart,
@@ -46,6 +47,13 @@ describe('operator rail', () => {
     expect(partDurability(add3)).toBe(12)
     expect(partDurability({ kind: 'weapon', weapon: 'saw', mass: 4 })).toBe(14)
     expect(partDurability({ kind: 'body', mass: 2 })).toBe(18)
+  })
+
+  it('reduces mounted-part resale value when durability is low', () => {
+    const weapon = { kind: 'weapon', weapon: 'homing', mass: 4 } as const
+    expect(partResaleValue(weapon, 14)).toBe(3)
+    expect(partResaleValue(weapon, 7)).toBe(1)
+    expect(partResaleValue(weapon, 0)).toBe(1)
   })
 })
 

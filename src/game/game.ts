@@ -3,6 +3,7 @@ import {
   calculatePower,
   movementScale,
   partDurability,
+  partResaleValue,
   readSave,
   writeSave,
   type DefenseKind,
@@ -11,6 +12,8 @@ import {
   type ShipPart,
   type WeaponKind,
 } from './logic'
+import { previewPart, rewardScrapValue, rollRewardChoices } from './rewards'
+import { OVERFLOW_COOLDOWN, OVERFLOW_DURATION, OVERFLOW_THRESHOLD, basicCannonOffsets } from './combat'
 
 type Phase =
   | 'tutorial'
@@ -38,7 +41,7 @@ type EnemyModule = {
   maxHp: number
 }
 type EnemyShip = { x: number; y: number; heading: number; name: string; modules: EnemyModule[] }
-type Bullet = { x: number; y: number; vx: number; vy: number; damage: number; life: number; kind: 'cannon' | 'homing' | 'explosive' }
+type Bullet = { x: number; y: number; vx: number; vy: number; damage: number; life: number; kind: 'cannon' | 'homing' | 'explosive'; size?: number }
 type Mine = { x: number; y: number; damage: number; life: number }
 type EnemyBullet = { x: number; y: number; vx: number; vy: number; damage: number; life: number }
 type PlayerModule = { id: 'armor-top' | 'armor-bottom' | 'core'; kind: 'armor' | 'core'; offset: Point; hp: number; maxHp: number }
@@ -55,6 +58,14 @@ const BODY_PART: ShipPart = { kind: 'body', mass: 2 }
 const INTERCEPTOR_PART: ShipPart = { kind: 'defense', defense: 'interceptor', mass: 3 }
 const SHIELD_PART: ShipPart = { kind: 'defense', defense: 'shield', mass: 4 }
 const REPAIR_PART: ShipPart = { kind: 'defense', defense: 'repair', mass: 4 }
+const REWARD_POOL: readonly ShipPart[] = [
+  ADD_THREE,
+  TIMES_TWO,
+  BODY_PART,
+  HOMING_PART,
+  MINE_PART,
+  EXPLOSIVE_PART,
+]
 const CYAN = '#65f5ed'
 const AMBER = '#ffbd59'
 const RED = '#ff5268'
@@ -91,6 +102,9 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ? restoredRun?.slotIntegrity[index] ?? partDurability(part)
     : 0)
   let pendingPart: ShipPart | null = null
+  let rewardChoices: ShipPart[] = []
+  let selectedRewardIndex: number | null = null
+  let rewardRerolled = false
   let deliveryPart: ShipPart | null = null
   let pendingSelected = false
   let player = {
@@ -123,10 +137,15 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   let hoverPoint: Point | null = null
   let deliveryTimer = 0
   let overflowPulse = 0
+  let overflowTime = 0
+  let overflowCooldown = 0
   let flash = 0
   let message = '자유 항해 중 · 센서 범위에서 미지 구역을 찾으세요'
   let buttons: Button[] = []
   let shopPage = 0
+  let selectedMountedSlot: number | null = null
+  let selectedSwapSlot: number | null = null
+  let massHelpOpen = false
   let tutorialPage = 0
   let frame = 0
   let lastTime = performance.now()
@@ -297,10 +316,12 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     if (phase === 'elite') {
       save.scrap += 10
       persist()
-      pendingPart = ADD_THREE
-      pendingSelected = false
+      pendingPart = null
+      rewardChoices = rollRewardChoices(REWARD_POOL, 3)
+      selectedRewardIndex = null
+      rewardRerolled = false
       phase = 'reward'
-      message = '공백 복귀 완료 · 회수한 부품을 처리하세요'
+      message = '공백 복귀 완료 · 무작위 증강 3개 중 하나를 선택하세요'
     } else {
       phase = 'void'
       save.victories += 1
@@ -317,6 +338,9 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     slots = [ADD_ONE, null, null, null, null, null]
     slotIntegrity = [partDurability(ADD_ONE), 0, 0, 0, 0, 0]
     pendingPart = null
+    rewardChoices = []
+    selectedRewardIndex = null
+    rewardRerolled = false
     player = { x: WORLD.w * 0.5, y: WORLD.h * 0.5 }
     playerModules = createPlayerModules()
     heading = -Math.PI / 2
@@ -325,6 +349,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     bullets = []
     mines = []
     enemyBullets = []
+    overflowTime = 0
+    overflowCooldown = 0
     explored = 0
     unknownDiscovered = false
     unknownResolved = false
@@ -337,6 +363,9 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   }
 
   const enterVoidAfterReward = () => {
+    rewardChoices = []
+    selectedRewardIndex = null
+    rewardRerolled = false
     phase = 'void'
     explored = 100
     unknownResolved = true
@@ -369,10 +398,106 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   const dismantlePending = () => {
     if (!pendingPart) return
-    save.scrap += pendingPart.kind === 'multiply' ? 6 : pendingPart.kind === 'weapon' ? 5 : 4
+    save.scrap += rewardScrapValue(pendingPart)
     persist()
     pendingPart = null
     enterVoidAfterReward()
+  }
+
+  const attachRewardChoice = () => {
+    if (selectedRewardIndex === null) {
+      message = '먼저 증강 카드 하나를 선택하세요'
+      return
+    }
+    pendingPart = rewardChoices[selectedRewardIndex]
+    pendingSelected = false
+    phase = 'assembly'
+    message = `${partLabel(pendingPart)} 선택 · 장착할 소켓을 지정하세요`
+  }
+
+  const dismantleRewardChoice = () => {
+    if (selectedRewardIndex === null) {
+      message = '분해할 증강 카드 하나를 선택하세요'
+      return
+    }
+    const part = rewardChoices[selectedRewardIndex]
+    const value = rewardScrapValue(part)
+    save.scrap += value
+    persist()
+    message = `${partLabel(part)} 분해 · +${value} SCRAP`
+    enterVoidAfterReward()
+  }
+
+  const rerollRewards = () => {
+    if (rewardRerolled) {
+      message = '이번 보상의 리롤은 이미 사용했습니다'
+      return
+    }
+    rewardChoices = rollRewardChoices(REWARD_POOL, 3)
+    selectedRewardIndex = null
+    rewardRerolled = true
+    message = '후보 3개를 다시 추첨했습니다'
+  }
+
+  const abandonRewards = () => {
+    message = '보상을 포기하고 공백 항로로 복귀합니다'
+    enterVoidAfterReward()
+  }
+
+  const sellMountedPart = (index: number) => {
+    const part = slots[index]
+    if (!part) return
+    if (selectedMountedSlot !== index) {
+      selectedMountedSlot = index
+      message = `${partLabel(part)} 판매를 한 번 더 눌러 확정하세요`
+      return
+    }
+    const remainingSlots = slots.map((candidate, candidateIndex) => candidateIndex === index ? null : candidate)
+    const remainingUnlocked = unlockedSocketCount(remainingSlots)
+    if (part.kind === 'body' && remainingSlots.slice(remainingUnlocked).some(Boolean)) {
+      selectedMountedSlot = null
+      message = '몸체 제거 불가 · 연결된 외곽 장비를 먼저 판매하세요'
+      return
+    }
+    const value = partResaleValue(part, slotIntegrity[index])
+    save.scrap += value
+    slots[index] = null
+    slotIntegrity[index] = 0
+    selectedMountedSlot = null
+    persistSafeRun()
+    message = `${partLabel(part)} 제거 및 판매 완료 · +${value} SCRAP`
+  }
+
+  const selectSwapSlot = (index: number) => {
+    const part = slots[index]
+    if (!part || (part.kind !== 'add' && part.kind !== 'multiply')) {
+      message = '순서 교환은 + 또는 × 증강끼리만 가능합니다'
+      return
+    }
+    if (selectedSwapSlot === null) {
+      selectedSwapSlot = index
+      message = `${partLabel(part)} 선택 · 교환할 다른 증강을 탭하세요`
+      return
+    }
+    if (selectedSwapSlot === index) {
+      selectedSwapSlot = null
+      message = '순서 교환 선택을 취소했습니다'
+      return
+    }
+    const target = slots[selectedSwapSlot]
+    if (!target || (target.kind !== 'add' && target.kind !== 'multiply')) {
+      selectedSwapSlot = index
+      message = `${partLabel(part)} 선택 · 교환할 다른 증강을 탭하세요`
+      return
+    }
+    const before = calculatePower(2, slots)
+    ;[slots[selectedSwapSlot], slots[index]] = [slots[index], slots[selectedSwapSlot]]
+    ;[slotIntegrity[selectedSwapSlot], slotIntegrity[index]] = [slotIntegrity[index], slotIntegrity[selectedSwapSlot]]
+    const after = calculatePower(2, slots)
+    selectedSwapSlot = null
+    overflowPulse = after >= OVERFLOW_THRESHOLD ? 1.4 : 0.45
+    persistSafeRun()
+    message = `증강 순서 교환 · FIRE ${before} → ${after}${after >= OVERFLOW_THRESHOLD ? ' · OVERFLOW 준비' : ''}`
   }
 
   const buyPart = (part: ShipPart, cost: number) => {
@@ -523,7 +648,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     const maxSpeed = (boostTime > 0 ? BOOST_SPEED : CRUISE_SPEED) * massScale
     if (accelerating) {
       // Only the hull turns — rotating the camera makes the void nauseating to read.
-      heading = turnToward(heading, Math.atan2(movement.y, movement.x), dt * 7)
+      heading = turnToward(heading, Math.atan2(movement.y, movement.x), dt * 7 * massScale)
       const acceleration = boostTime > 0 ? 225 : 155
       velocity.x += movement.x * acceleration * dt
       velocity.y += movement.y * acceleration * dt
@@ -588,6 +713,13 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   const updateCombat = (dt: number) => {
     updateMovement(dt)
     if (!enemy) return
+    const currentPower = calculatePower(2, slots)
+    if (currentPower >= OVERFLOW_THRESHOLD && overflowTime <= 0 && overflowCooldown <= 0) {
+      overflowTime = OVERFLOW_DURATION
+      overflowCooldown = OVERFLOW_COOLDOWN
+      overflowPulse = 1.8
+      message = `OVERFLOW 발동 · FIRE ${currentPower} · 기본포 4발`
+    }
     let chaseAngle = Math.atan2(player.y - enemy.y, player.x - enemy.x)
     const nearbyMine = mines.find((mine) => Math.hypot(mine.x - enemy!.x, mine.y - enemy!.y) < 150)
     if (nearbyMine) chaseAngle += Math.sin(performance.now() * 0.003) > 0 ? 0.65 : -0.65
@@ -601,15 +733,17 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     resolveShipCollision()
     fireTimer -= dt
     if (fireTimer <= 0) {
-      for (const side of [-1, 1]) {
+      const overflowActive = overflowTime > 0
+      for (const side of basicCannonOffsets(overflowActive)) {
         bullets.push({
           x: player.x + Math.cos(heading) * 28 - Math.sin(heading) * side * 6,
           y: player.y + Math.sin(heading) * 28 + Math.cos(heading) * side * 6,
           vx: Math.cos(heading) * 520,
           vy: Math.sin(heading) * 520,
-          damage: calculatePower(2, slots) * 0.7,
+          damage: currentPower * 0.7,
           life: 1.8,
           kind: 'cannon',
+          size: overflowActive ? 6.5 : 3.5,
         })
       }
       fireTimer = 0.85
@@ -780,6 +914,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     shieldFlash = Math.max(0, shieldFlash - dt)
     collisionTimer = Math.max(0, collisionTimer - dt)
     overflowPulse = Math.max(0, overflowPulse - dt)
+    overflowTime = Math.max(0, overflowTime - dt)
+    overflowCooldown = Math.max(0, overflowCooldown - dt)
     boostTime = Math.max(0, boostTime - dt)
     boostCooldown = Math.max(0, boostCooldown - dt)
     if (warpTimer > 0) {
@@ -892,9 +1028,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   ]
 
   const drawPlayer = () => {
-    const power = calculatePower(2, slots)
     const pulse = 0.75 + Math.sin(performance.now() * 0.008) * 0.2
-    const accent = power >= 10 ? AMBER : CYAN
+    const accent = overflowTime > 0 ? AMBER : CYAN
     ctx.save()
     ctx.translate(player.x, player.y)
     ctx.rotate(heading)
@@ -935,7 +1070,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     // Empty socket brackets make the expandable frame legible from the first frame.
     for (let index = 0; index < SOCKETS.length; index += 1) {
       const socket = SOCKETS[index]
-      ctx.strokeStyle = slots[index] ? '#4d7c86' : 'rgba(101,245,237,.28)'
+      ctx.strokeStyle = slots[index] ? overflowTime > 0 ? AMBER : '#4d7c86' : 'rgba(101,245,237,.28)'
       ctx.lineWidth = 2
       ctx.beginPath()
       ctx.moveTo(socket.x * 0.35, socket.y * 0.35)
@@ -951,7 +1086,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     // A small common core frame replaces a conventional ship-shaped hull.
     ctx.strokeStyle = accent
     ctx.shadowColor = accent
-    ctx.shadowBlur = power >= 10 ? 20 : 9
+    ctx.shadowBlur = overflowTime > 0 ? 20 : 9
     ctx.lineWidth = 2
     ctx.fillStyle = '#08191f'
     ctx.fillRect(-13, -13, 26, 26)
@@ -1090,7 +1225,7 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   }
 
   const drawHoverTooltip = () => {
-    if (!hoverPoint) return
+    if (!hoverPoint || massHelpOpen) return
     const hovered = [...buttons].reverse().find((button) => button.hoverText && inside(hoverPoint!, button))
     if (!hovered?.hoverText) return
     ctx.font = '700 11px ui-monospace, monospace'
@@ -1197,11 +1332,11 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
 
   const drawCombatEffects = () => {
     for (const bullet of bullets) {
-      ctx.fillStyle = bullet.kind === 'explosive' ? RED : bullet.kind === 'homing' ? AMBER : calculatePower(2, slots) >= 10 ? AMBER : CYAN
+      ctx.fillStyle = bullet.kind === 'explosive' ? RED : bullet.kind === 'homing' ? AMBER : overflowTime > 0 ? AMBER : CYAN
       ctx.shadowColor = ctx.fillStyle
       ctx.shadowBlur = 10
       ctx.beginPath()
-      ctx.arc(bullet.x, bullet.y, bullet.kind === 'explosive' ? 7 : bullet.kind === 'homing' ? 5 : 3.5, 0, Math.PI * 2)
+      ctx.arc(bullet.x, bullet.y, bullet.kind === 'explosive' ? 7 : bullet.kind === 'homing' ? 5 : bullet.size ?? 3.5, 0, Math.PI * 2)
       ctx.fill()
     }
     for (const mine of mines) {
@@ -1261,6 +1396,57 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     ctx.fillStyle = '#bed0d7'
     ctx.font = '12px ui-monospace, monospace'
     ctx.fillText(message, 28, height - 37)
+    addButton(158, 45, 22, 22, '?', () => { massHelpOpen = !massHelpOpen }, mass > 6 ? RED : '#71858d', '과적 디메리트 확인')
+  }
+
+  const drawOverflowStatus = () => {
+    if (phase !== 'elite' && phase !== 'boss') return
+    const active = overflowTime > 0
+    if (!active && overflowCooldown <= 0) return
+    const w = Math.min(330, width - 32)
+    const x = (width - w) / 2
+    const y = width < 520 ? 88 : 24
+    ctx.fillStyle = active ? 'rgba(44,29,7,.94)' : 'rgba(5,14,20,.9)'
+    ctx.strokeStyle = active ? AMBER : '#52666e'
+    ctx.lineWidth = active ? 2 : 1
+    ctx.fillRect(x, y, w, 48)
+    ctx.strokeRect(x, y, w, 48)
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'top'
+    ctx.fillStyle = active ? AMBER : '#8fa4ad'
+    ctx.font = '700 12px ui-monospace, monospace'
+    ctx.fillText(active ? `OVERFLOW // ${overflowTime.toFixed(1)}s` : `OVERFLOW 재충전 // ${overflowCooldown.toFixed(1)}s`, width / 2, y + 8)
+    ctx.fillStyle = active ? '#fff1c9' : '#71858d'
+    ctx.font = '10px ui-monospace, monospace'
+    ctx.fillText(active ? `CORE 2 ${operatorFormula(slots)} = FIRE ${calculatePower(2, slots)} · 기본포 4발` : 'FIRE 10 이상에서 자동 재발동', width / 2, y + 28)
+  }
+
+  const drawMassHelp = () => {
+    if (!massHelpOpen || phase === 'tutorial') return
+    const mass = calculateMass(slots)
+    const scale = movementScale(mass)
+    const penalty = Math.round((1 - scale) * 100)
+    const panelWidth = Math.min(390, width - 32)
+    const x = 16
+    const y = 86
+    const h = 126
+    ctx.fillStyle = 'rgba(5,14,20,.97)'
+    ctx.strokeStyle = mass > 6 ? RED : CYAN
+    ctx.lineWidth = 1
+    ctx.fillRect(x, y, panelWidth, h)
+    ctx.strokeRect(x, y, panelWidth, h)
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    ctx.fillStyle = mass > 6 ? RED : CYAN
+    ctx.font = '700 13px ui-monospace, monospace'
+    ctx.fillText(`MASS LIMIT // ${mass > 6 ? `과적 -${penalty}%` : '안정'}`, x + 14, y + 14)
+    ctx.fillStyle = '#b8cbd2'
+    ctx.font = '11px ui-monospace, monospace'
+    ctx.fillText('질량 6 초과: 1당 속도·회전 -7.5%', x + 14, y + 43)
+    ctx.fillText('최대 패널티 -45% · 큰 외곽 구조는 피격 면적 증가', x + 14, y + 64)
+    ctx.fillStyle = mass > 6 ? AMBER : '#8198a2'
+    ctx.fillText(`현재 이동·회전 효율 ${Math.round(scale * 100)}%`, x + 14, y + 91)
+    addButton(x + panelWidth - 42, y + 10, 28, 24, '×', () => { massHelpOpen = false }, '#81949c')
   }
 
   const drawWorldZones = () => {
@@ -1497,20 +1683,79 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   }
 
   const drawReward = () => {
-    const part = pendingPart ?? ADD_THREE
-    const panel = drawPanel(`부품 회수  ${partLabel(part)}`, [
-      '부품 선택 → 전기 표시된 소켓 선택으로 결합합니다.',
-      '필요 없다면 스크랩으로 분해할 수 있습니다.',
-    ], 440)
-    drawAttachmentGrid(panel, part)
-    addButton(panel.x + 24, panel.y + panel.h - 68, 180, 44, '분해  +5 SCRAP', dismantlePending, '#9db0b7')
+    const compact = width < 520
+    const panel = drawPanel('미지 증강 3택', [
+      '후보를 탭한 뒤 장착·분해하거나 한 번만 다시 추첨합니다.',
+      '카드의 FIRE와 MASS 변화를 먼저 비교하세요.',
+    ], compact ? 690 : 590)
+    const gap = compact ? 8 : 12
+    const cardTop = panel.y + 150
+    const cardWidth = compact ? panel.w - 48 : (panel.w - 48 - gap * 2) / 3
+    const cardHeight = compact ? 104 : 230
+    rewardChoices.forEach((part, index) => {
+      const x = compact ? panel.x + 24 : panel.x + 24 + index * (cardWidth + gap)
+      const y = compact ? cardTop + index * (cardHeight + gap) : cardTop
+      drawRewardCard(part, index, x, y, cardWidth, cardHeight, compact)
+    })
+
+    const selected = selectedRewardIndex === null ? null : rewardChoices[selectedRewardIndex]
+    const dismantleLabel = selected ? `분해 +${rewardScrapValue(selected)}` : '분해'
+    if (compact) {
+      const buttonWidth = (panel.w - 48 - gap) / 2
+      const firstRow = panel.y + panel.h - 112
+      addButton(panel.x + 24, firstRow, buttonWidth, 40, '장착', attachRewardChoice, AMBER)
+      addButton(panel.x + 24 + buttonWidth + gap, firstRow, buttonWidth, 40, dismantleLabel, dismantleRewardChoice, '#9db0b7')
+      addButton(panel.x + 24, firstRow + 48, buttonWidth, 40, rewardRerolled ? '리롤 사용됨' : '1회 리롤', rerollRewards, CYAN)
+      addButton(panel.x + 24 + buttonWidth + gap, firstRow + 48, buttonWidth, 40, '보상 포기', abandonRewards, '#71858d')
+    } else {
+      const buttonWidth = (panel.w - 48 - gap * 3) / 4
+      const y = panel.y + panel.h - 62
+      addButton(panel.x + 24, y, buttonWidth, 40, '장착', attachRewardChoice, AMBER)
+      addButton(panel.x + 24 + (buttonWidth + gap), y, buttonWidth, 40, dismantleLabel, dismantleRewardChoice, '#9db0b7')
+      addButton(panel.x + 24 + (buttonWidth + gap) * 2, y, buttonWidth, 40, rewardRerolled ? '리롤 사용됨' : '1회 리롤', rerollRewards, CYAN)
+      addButton(panel.x + 24 + (buttonWidth + gap) * 3, y, buttonWidth, 40, '보상 포기', abandonRewards, '#71858d')
+    }
+  }
+
+  const drawRewardCard = (part: ShipPart, index: number, x: number, y: number, w: number, h: number, compact: boolean) => {
+    const selected = selectedRewardIndex === index
+    const preview = previewPart(slots, part, unlockedSocketCount(slots))
+    const accent = selected ? AMBER : partColor(part)
+    ctx.fillStyle = selected ? 'rgba(255,189,89,.13)' : '#091820'
+    ctx.strokeStyle = accent
+    ctx.lineWidth = selected ? 2.5 : 1
+    ctx.fillRect(x, y, w, h)
+    ctx.strokeRect(x, y, w, h)
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    ctx.fillStyle = accent
+    ctx.font = `700 ${compact ? 13 : 17}px ui-monospace, monospace`
+    ctx.fillText(partLabel(part), x + 12, y + 10)
+    ctx.fillStyle = '#b8cbd2'
+    ctx.font = `${compact ? 9 : 10}px ui-monospace, monospace`
+    ctx.fillText(partDescription(part), x + 12, y + (compact ? 32 : 47))
+    ctx.fillStyle = '#7f98a2'
+    ctx.fillText(`MASS ${preview.massBefore} → ${preview.massAfter}  (+${part.mass})`, x + 12, y + (compact ? 53 : 86))
+    ctx.fillStyle = preview.fireAfter >= 10 ? AMBER : '#d9ffff'
+    ctx.font = `700 ${compact ? 11 : 14}px ui-monospace, monospace`
+    ctx.fillText(`FIRE ${preview.fireBefore} → ${preview.fireAfter}`, x + 12, y + (compact ? 72 : 119))
+    ctx.fillStyle = !preview.canAttach ? RED : preview.overloaded ? RED : CYAN
+    ctx.font = '700 10px ui-monospace, monospace'
+    ctx.fillText(!preview.canAttach ? '소켓 부족' : preview.overloaded ? '과적 발생' : '질량 안정', x + 12, y + (compact ? 88 : 151))
+    if (!compact) {
+      ctx.fillStyle = selected ? AMBER : '#71858d'
+      ctx.font = '10px ui-monospace, monospace'
+      ctx.fillText(selected ? '선택됨 // 행동을 결정하세요' : '탭하여 선택', x + 12, y + h - 28)
+    }
+    buttons.push({ x, y, w, h, action: () => { selectedRewardIndex = index } })
   }
 
   const drawAssembly = () => {
     const part = pendingPart ?? TIMES_TWO
+    const preview = previewPart(slots, part, unlockedSocketCount(slots))
     const panel = drawPanel(`배송 캡슐  ${partLabel(part)}`, [
       partDescription(part),
-      '부품을 선택하면 장착 가능한 연결부가 점화됩니다.',
+      `FIRE ${preview.fireBefore} → ${preview.fireAfter} · MASS ${preview.massBefore} → ${preview.massAfter} · ${preview.overloaded ? '과적' : '안정'}`,
     ], 440)
     drawAttachmentGrid(panel, part)
     addButton(panel.x + 24, panel.y + panel.h - 68, 180, 44, '분해  +6 SCRAP', dismantlePending, '#9db0b7')
@@ -1576,7 +1821,11 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
   }
 
   const drawShop = () => {
-    const panel = drawPanel('공백 상점', [
+    const managing = shopPage === 3
+    const panel = drawPanel(managing ? '장착 관리' : '공백 상점', managing ? [
+      `CORE 2 ${operatorFormula(slots)} = FIRE ${calculatePower(2, slots)}`,
+      '증강 두 개 탭: 순서 교환 · 판매 버튼 두 번: 제거',
+    ] : [
       `보유 스크랩  ${save.scrap}`,
       '구매한 부품은 배송 캡슐로 즉시 워프합니다.',
     ], 560)
@@ -1591,13 +1840,46 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
         { part: SHIELD_PART, cost: 7 }, { part: INTERCEPTOR_PART, cost: 7 }, { part: REPAIR_PART, cost: 8 },
       ],
     ]
-    pages[shopPage].forEach(({ part, cost }, index) => {
+    if (shopPage === 3) {
+      const listTop = panel.y + 145
+      const listBottom = panel.y + panel.h - 72
+      const rowGap = 4
+      const rowHeight = Math.min(50, (listBottom - listTop - rowGap * 5) / 6)
+      slots.forEach((part, index) => {
+        const cardX = panel.x + 24
+        const cardY = listTop + index * (rowHeight + rowGap)
+        ctx.fillStyle = '#0a1820'
+        ctx.fillRect(cardX, cardY, panel.w - 48, rowHeight)
+        const swapSelected = selectedSwapSlot === index
+        ctx.strokeStyle = swapSelected ? AMBER : part ? partColor(part) : '#263b43'
+        ctx.lineWidth = swapSelected ? 2.5 : 1
+        ctx.strokeRect(cardX, cardY, panel.w - 48, rowHeight)
+        ctx.textAlign = 'left'
+        ctx.textBaseline = 'top'
+        ctx.fillStyle = part ? partColor(part) : '#52636a'
+        ctx.font = '700 12px ui-monospace, monospace'
+        ctx.fillText(`SLOT ${index + 1}  ${part ? partLabel(part) : 'EMPTY'}${swapSelected ? '  // 교환 1/2' : ''}`, cardX + 12, cardY + 6)
+        if (!part) return
+        const value = partResaleValue(part, slotIntegrity[index])
+        ctx.fillStyle = '#8fa5af'
+        ctx.font = '10px ui-monospace, monospace'
+        ctx.fillText(width < 520
+          ? `내구 ${Math.ceil(slotIntegrity[index])}/${partDurability(part)} · 제거`
+          : `내구 ${Math.ceil(slotIntegrity[index])}/${partDurability(part)} · 판매 후 소켓 비움`, cardX + 12, cardY + 23)
+        if (part.kind === 'add' || part.kind === 'multiply') {
+          buttons.push({ x: cardX, y: cardY, w: panel.w - 48, h: rowHeight, action: () => selectSwapSlot(index) })
+        }
+        const confirming = selectedMountedSlot === index
+        addButton(panel.x + panel.w - 154, cardY + 6, 114, Math.max(28, rowHeight - 12), confirming ? `확정 +${value}` : `판매 +${value}`, () => sellMountedPart(index), confirming ? RED : AMBER)
+      })
+    } else pages[shopPage].forEach(({ part, cost }, index) => {
+      const preview = previewPart(slots, part, unlockedSocketCount(slots))
       const cardX = panel.x + 24
-      const cardY = panel.y + 145 + index * 58
+      const cardY = panel.y + 145 + index * 76
       ctx.fillStyle = '#0a1820'
-      ctx.fillRect(cardX, cardY, panel.w - 48, 50)
+      ctx.fillRect(cardX, cardY, panel.w - 48, 68)
       ctx.strokeStyle = partColor(part)
-      ctx.strokeRect(cardX, cardY, panel.w - 48, 50)
+      ctx.strokeRect(cardX, cardY, panel.w - 48, 68)
       ctx.fillStyle = partColor(part)
       ctx.textAlign = 'left'
       ctx.textBaseline = 'top'
@@ -1605,13 +1887,21 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
       ctx.fillText(partLabel(part), cardX + 12, cardY + 8)
       ctx.fillStyle = '#8fa5af'
       ctx.font = '10px ui-monospace, monospace'
-      ctx.fillText(partDescription(part), cardX + 12, cardY + 29)
+      ctx.fillText(partDescription(part), cardX + 12, cardY + 28)
+      ctx.fillStyle = preview.overloaded ? RED : '#b8cbd2'
+      ctx.fillText(`FIRE ${preview.fireBefore}→${preview.fireAfter} · MASS ${preview.massBefore}→${preview.massAfter} · ${preview.canAttach ? preview.overloaded ? '과적' : '안정' : '소켓 부족'}`, cardX + 12, cardY + 48)
       addButton(panel.x + panel.w - 130, cardY + 8, 90, 34, `${cost} SCRAP`, () => buyPart(part, cost), partColor(part))
     })
-    const nextLabels = ['무기 장비 →', '방어 장비 →', '← 기본 장비']
-    addButton(panel.x + panel.w - 150, panel.y + panel.h - 58, 126, 36, nextLabels[shopPage], () => { shopPage = (shopPage + 1) % pages.length }, AMBER)
+    const nextLabels = ['무기 장비 →', '방어 장비 →', '장착 관리 →', '← 기본 장비']
+    addButton(panel.x + panel.w - 150, panel.y + panel.h - 58, 126, 36, nextLabels[shopPage], () => {
+      shopPage = (shopPage + 1) % 4
+      selectedMountedSlot = null
+      selectedSwapSlot = null
+    }, AMBER)
     addButton(panel.x + 24, panel.y + panel.h - 58, 120, 36, '닫기', () => {
       phase = 'void'
+      selectedMountedSlot = null
+      selectedSwapSlot = null
       message = '상점 연결 종료'
     }, '#80939b')
   }
@@ -1688,6 +1978,8 @@ export function createGame(canvas: HTMLCanvasElement): { destroy(): void } {
     if (phase === 'victory') drawEnd(true)
     if (phase === 'defeat') drawEnd(false)
     if (phase !== 'tutorial') drawHud()
+    drawOverflowStatus()
+    drawMassHelp()
     drawHoverTooltip()
     if (overflowPulse > 0) {
       ctx.strokeStyle = `rgba(255,189,89,${Math.min(1, overflowPulse) * 0.65})`
@@ -1776,6 +2068,13 @@ function unlockedSocketCount(slots: Array<ShipPart | null>): number {
   return Math.min(6, 4 + slots.filter((part) => part?.kind === 'body').length)
 }
 
+function operatorFormula(slots: Array<ShipPart | null>): string {
+  const operators = slots
+    .filter((part): part is OperatorPart => part?.kind === 'add' || part?.kind === 'multiply')
+    .map((part) => part.kind === 'add' ? `→ +${part.value}` : `→ ×${part.value}`)
+  return operators.length ? ` ${operators.join(' ')}` : ''
+}
+
 function partColor(part: ShipPart): string {
   if (part.kind === 'multiply' || part.kind === 'weapon') return AMBER
   if (part.kind === 'defense') return CYAN
@@ -1806,9 +2105,9 @@ function defenseLabel(kind: DefenseKind): string {
 }
 
 function partDescription(part: ShipPart): string {
-  if (part.kind === 'add') return `연결 화력에 ${part.value}를 더함`
-  if (part.kind === 'multiply') return `앞선 연산 화력을 ${part.value}배 증폭`
-  if (part.kind === 'body') return '추가 부품 소켓 1개 개방'
+  if (part.kind === 'add') return `누적 FIRE에 ${part.value} 추가`
+  if (part.kind === 'multiply') return `앞에서 계산된 누적 FIRE를 ${part.value}배`
+  if (part.kind === 'body') return 'FIRE 변화 없음 · 장착 소켓 +1'
   if (part.kind === 'weapon') {
     if (part.weapon === 'homing') return '느린 주기 · 강한 유도 공격'
     if (part.weapon === 'mine') return '후방 설치 · 적이 살짝 회피'
