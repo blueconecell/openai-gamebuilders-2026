@@ -61,6 +61,18 @@ export function partDurability(part: ShipPart): number {
   return 12
 }
 
+export function partResaleValue(part: ShipPart, integrity: number): number {
+  const base = part.kind === 'multiply'
+    ? 4
+    : part.kind === 'weapon' || part.kind === 'defense'
+      ? 3
+      : part.kind === 'body'
+        ? 2
+        : 1
+  const condition = Math.max(0, Math.min(1, integrity / partDurability(part)))
+  return Math.max(1, Math.floor(base * condition))
+}
+
 export function readSave(storage?: Pick<Storage, 'getItem'>): SaveData {
   if (!storage) return { ...DEFAULT_SAVE }
 
