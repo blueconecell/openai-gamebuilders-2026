@@ -504,13 +504,13 @@ export function createGame(
 
   const selectSwapSlot = (index: number) => {
     const part = slots[index]
-    if (!part || (part.kind !== 'add' && part.kind !== 'multiply')) {
-      message = '순서 교환은 + 또는 × 증강끼리만 가능합니다'
-      return
-    }
     if (selectedSwapSlot === null) {
+      if (!part) {
+        message = '먼저 이동할 부품을 선택하세요'
+        return
+      }
       selectedSwapSlot = index
-      message = `${partLabel(part)} 선택 · 교환할 다른 증강을 탭하세요`
+      message = `${partLabel(part)} 선택 · 옮길 소켓을 탭하세요`
       return
     }
     if (selectedSwapSlot === index) {
@@ -518,20 +518,33 @@ export function createGame(
       message = '순서 교환 선택을 취소했습니다'
       return
     }
-    const target = slots[selectedSwapSlot]
-    if (!target || (target.kind !== 'add' && target.kind !== 'multiply')) {
-      selectedSwapSlot = index
-      message = `${partLabel(part)} 선택 · 교환할 다른 증강을 탭하세요`
+    if (index >= unlockedSocketCount(slots)) {
+      message = '잠긴 소켓에는 배치할 수 없습니다'
+      return
+    }
+    const sourceIndex = selectedSwapSlot
+    if (!slots[sourceIndex]) {
+      selectedSwapSlot = null
       return
     }
     const before = calculatePower(2, slots)
-    ;[slots[selectedSwapSlot], slots[index]] = [slots[index], slots[selectedSwapSlot]]
-    ;[slotIntegrity[selectedSwapSlot], slotIntegrity[index]] = [slotIntegrity[index], slotIntegrity[selectedSwapSlot]]
+    ;[slots[sourceIndex], slots[index]] = [slots[index], slots[sourceIndex]]
+    ;[slotIntegrity[sourceIndex], slotIntegrity[index]] = [slotIntegrity[index], slotIntegrity[sourceIndex]]
     const after = calculatePower(2, slots)
     selectedSwapSlot = null
     overflowPulse = after >= OVERFLOW_THRESHOLD ? 1.4 : 0.45
     persistSafeRun()
-    message = `증강 순서 교환 · FIRE ${before} → ${after}${after >= OVERFLOW_THRESHOLD ? ' · OVERFLOW 준비' : ''}`
+    message = `부품 배치 변경 · FIRE ${before} → ${after}${after >= OVERFLOW_THRESHOLD ? ' · OVERFLOW 준비' : ''}`
+  }
+
+  const openHullManagement = () => {
+    velocity = { x: 0, y: 0 }
+    stick = null
+    shopPage = 3
+    selectedMountedSlot = null
+    selectedSwapSlot = null
+    phase = 'shop'
+    message = '함선 본체 정보 · 부품을 이동하거나 분해하세요'
   }
 
   const buyPart = (part: ShipPart, cost: number) => {
@@ -1746,6 +1759,9 @@ export function createGame(
       ctx.fillStyle = '#8198a2'
       ctx.font = '12px ui-monospace, monospace'
       ctx.fillText('정지 상태 · 안전 저장됨', width / 2, height * 0.3 + 26)
+      ctx.fillStyle = '#a9c1c9'
+      ctx.font = '10px ui-monospace, monospace'
+      ctx.fillText('내 함선 탭 · 본체 정보 / 배치 관리', width / 2, height * 0.3 + 47)
       const w = Math.min(260, width - 40)
       const x = width - w - 22
       addButton(x, height - 126, w, 44, '공백 상점 열기', () => { phase = 'shop' })
@@ -1893,8 +1909,9 @@ export function createGame(
       const sy = cy + socket.y * scale
       const available = index < unlocked
       const canAttach = available && !part && pendingSelected
-      ctx.strokeStyle = part ? partColor(part) : available ? `${CYAN}88` : '#2a3439'
-      ctx.lineWidth = canAttach ? 2.5 : 1.2
+      const dismantleSelected = Boolean(part) && selectedMountedSlot === index
+      ctx.strokeStyle = dismantleSelected ? RED : part ? partColor(part) : available ? `${CYAN}88` : '#2a3439'
+      ctx.lineWidth = canAttach || dismantleSelected ? 2.5 : 1.2
       ctx.setLineDash(canAttach ? [3, 4] : [])
       ctx.beginPath()
       if (canAttach) {
@@ -1911,11 +1928,20 @@ export function createGame(
       ctx.fillRect(sx - 17, sy - 17, 34, 34)
       ctx.strokeRect(sx - 17, sy - 17, 34, 34)
       ctx.setLineDash([])
-      ctx.fillStyle = part ? partColor(part) : available ? '#58717b' : '#303b40'
+      ctx.fillStyle = dismantleSelected ? RED : part ? partColor(part) : available ? '#58717b' : '#303b40'
       ctx.font = '700 10px ui-monospace, monospace'
-      ctx.fillText(part ? partLabel(part) : available ? '+' : 'LOCK', sx, sy)
+      ctx.fillText(dismantleSelected ? '분해?' : part ? partLabel(part) : available ? '+' : 'LOCK', sx, sy)
       if (canAttach) {
         buttons.push({ x: sx - 24, y: sy - 24, w: 48, h: 48, action: () => selectSocket(index) })
+      } else if (part) {
+        buttons.push({
+          x: sx - 24,
+          y: sy - 24,
+          w: 48,
+          h: 48,
+          action: () => sellMountedPart(index),
+          hoverText: '두 번 눌러 기존 부품 분해',
+        })
       }
     })
     const firstEmpty = slots.findIndex((part, index) => !part && index < unlocked)
@@ -1932,9 +1958,9 @@ export function createGame(
 
   const drawShop = () => {
     const managing = shopPage === 3
-    const panel = drawPanel(managing ? '장착 관리' : '공백 상점', managing ? [
+    const panel = drawPanel(managing ? '함선 본체 정보' : '공백 상점', managing ? [
       `CORE 2 ${operatorFormula(slots)} = FIRE ${calculatePower(2, slots)}`,
-      '증강 두 개 탭: 순서 교환 · 판매 버튼 두 번: 제거',
+      '부품 탭 후 다른 소켓 탭: 이동 · 판매 버튼 두 번: 분해',
     ] : [
       `보유 스크랩  ${save.scrap}`,
       '구매한 부품은 배송 캡슐로 즉시 워프합니다.',
@@ -1965,6 +1991,9 @@ export function createGame(
         ctx.fillStyle = part ? partColor(part) : '#52636a'
         ctx.font = '700 12px ui-monospace, monospace'
         ctx.fillText(`SLOT ${index + 1}  ${part ? partLabel(part) : 'EMPTY'}${swapSelected ? '  // 교환 1/2' : ''}`, cardX + 12, cardY + 6)
+        if (index < unlockedSocketCount(slots)) {
+          buttons.push({ x: cardX, y: cardY, w: panel.w - 48, h: rowHeight, action: () => selectSwapSlot(index) })
+        }
         if (!part) return
         const value = partResaleValue(part, slotIntegrity[index])
         ctx.fillStyle = '#8fa5af'
@@ -1972,9 +2001,6 @@ export function createGame(
         ctx.fillText(width < 520
           ? `내구 ${Math.ceil(slotIntegrity[index])}/${partDurability(part)} · 제거`
           : `내구 ${Math.ceil(slotIntegrity[index])}/${partDurability(part)} · 판매 후 소켓 비움`, cardX + 12, cardY + 23)
-        if (part.kind === 'add' || part.kind === 'multiply') {
-          buttons.push({ x: cardX, y: cardY, w: panel.w - 48, h: rowHeight, action: () => selectSwapSlot(index) })
-        }
         const confirming = selectedMountedSlot === index
         addButton(panel.x + panel.w - 154, cardY + 6, 114, Math.max(28, rowHeight - 12), confirming ? `확정 +${value}` : `판매 +${value}`, () => sellMountedPart(index), confirming ? RED : AMBER)
       })
@@ -2066,6 +2092,17 @@ export function createGame(
       }
     }
     ctx.restore()
+    if (phase === 'void') {
+      buttons.push({
+        x: width / 2 - 56,
+        y: height / 2 - 56,
+        w: 112,
+        h: 112,
+        action: openHullManagement,
+        hoverText: '내 함선 정보 · 배치 관리',
+        hitTest: (point) => Math.hypot(point.x - width / 2, point.y - height / 2) <= 56,
+      })
+    }
     drawWarpEffect(time)
     drawStick()
     drawBoostControl()
